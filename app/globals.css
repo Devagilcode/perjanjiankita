@@ -159,24 +159,55 @@ button { cursor: pointer; }
 
 @media (max-width: 480px) {
   .site-shell { padding-right: 13px; padding-left: 13px; }
-  .topbar-note { font-size: 10px; }
+  .brand { font-size: 16px; }
+  .topbar-note { font-size: 11px; }
   .intro { min-height: 225px; }
-  .intro h1 { font-size: 35px; }
-  .intro-description { max-width: 300px; font-size: 10px; }
+  .intro h1 { font-size: 36px; }
+  .intro-description { max-width: 300px; font-size: 12px; line-height: 1.65; }
   .intro-decoration { right: -8px; bottom: 1px; width: 90px; opacity: .45; }
   .editor-panel { padding: 19px 16px; }
+  .panel-heading .eyebrow { font-size: 9px; }
+  .panel-heading h2 { font-size: 25px; }
+  .step-badge { font-size: 9px; }
+  .field-label { font-size: 13px; }
+  .text-input { height: 46px; font-size: 16px; }
+  .add-point-row .text-input { height: 46px; }
+  .points-heading > span { font-size: 11px; }
+  .point-editor { gap: 8px; }
+  .point-number { padding-top: 11px; font-size: 11px; }
+  .point-editor textarea { min-height: 60px; padding: 9px; font-size: 13px; line-height: 1.5; }
+  .remove-point { width: 27px; height: 34px; font-size: 20px; }
+  .add-button { width: 46px; flex-basis: 46px; font-size: 24px; }
+  .editor-tip { padding: 12px; }
+  .tip-icon { font-size: 18px; }
+  .editor-tip p { font-size: 12px; }
+  .print-button { height: 48px; font-size: 14px; }
+  .privacy-note { font-size: 10px; }
+  .preview-topline .eyebrow { font-size: 9px; }
+  .preview-subtitle { font-size: 12px; }
+  .paper-count { font-size: 11px; }
   .document { padding: 25px 19px 21px; }
   .document::before { inset: 7px; }
-  .document-heading h2 { font-size: 27px; }
-  .document-body { margin-top: 19px; }
-  .opening, .preamble, .closing, .party-list p { font-size: 9px; }
-  .agreement-list li { font-size: 8.7px; }
+  .document-kicker { font-size: 8px; letter-spacing: 1.2px; }
+  .document-heading h2 { font-size: 29px; }
+  .document-subtitle { font-size: 12px; }
+  .document-body { margin-top: 20px; }
+  .opening, .preamble, .closing, .party-list p { font-size: 11.5px; }
+  .party-list p { display: block; }
+  .party-index { display: inline-block; margin-right: 6px; }
+  .agreement-list li { font-size: 11px; }
+  .agreement-number { font-size: 9px; }
+  .signature-date { font-size: 12px; }
   .signature-area { gap: 12px; margin-right: -9px; margin-left: -9px; }
-  .signature-canvas { height: 82px; }
-  .signature-hint { font-size: 6px; }
-  .signature-printed-name { font-size: 7.5px; }
+  .signature-role { font-size: 10px; }
+  .signature-canvas { height: 92px; }
+  .signature-hint { font-size: 8px; }
+  .clear-signature { font-size: 9px; }
+  .signature-printed-name { font-size: 9.5px; }
   .heart-divider { width: 30px; height: 30px; top: 40px; }
   .heart-divider .heart-mark { width: 19px; height: 19px; }
+  .stamp-top, .stamp-bottom { font-size: 6px; }
+  .document-footnote { font-size: 9px; }
 }
 
 @media print {
