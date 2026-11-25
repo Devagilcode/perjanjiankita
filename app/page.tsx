@@ -1,12 +1,38 @@
 "use client";
 
-import { useRef, useState, type PointerEvent } from "react";
+import { useEffect, useRef, useState, type PointerEvent } from "react";
 
+const STORAGE_KEY = "perjanjiankita:agreement:v1";
 const initialPoints = [
   "Kami sepakat untuk saling menghargai, menjaga kepercayaan, dan berkomunikasi dengan jujur dalam keadaan apa pun.",
   "Kami akan meluangkan waktu untuk satu sama lain dan menyelesaikan setiap perbedaan dengan kepala dingin.",
   "Kami berkomitmen untuk saling mendukung dalam bertumbuh, meraih cita-cita, dan menjaga kebahagiaan bersama.",
 ];
+
+type SavedAgreement = {
+points: string[];
+date: string;
+place: string;
+signatures: string[];
+};
+
+function isSavedAgreement(value: unknown): value is SavedAgreement {
+if (typeof value !== "object" || value === null) return false;
+const saved = value as Record<string, unknown>;
+return (
+  Array.isArray(saved.points) &&
+  saved.points.every((point) => typeof point === "string") &&
+  typeof saved.date === "string" &&
+  typeof saved.place === "string" &&
+  Array.isArray(saved.signatures) &&
+  saved.signatures.length === 2 &&
+  saved.signatures.every(
+    (signature) =>
+      typeof signature === "string" &&
+      (!signature || /^data:image\/png;base64,[A-Za-z0-9+/]+=*$/.test(signature)),
+  )
+);
+}
 
 function HeartMark() {
   return (
@@ -37,13 +63,28 @@ function HeartMark() {
 
 function SignaturePad({
   label,
+  signature,
   onChange,
 }: {
   label: string;
+  signature: string;
   onChange: (signature: string) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isDrawing, setIsDrawing] = useState(false);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) return;
+
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    if (!signature) return;
+
+    const image = new Image();
+    image.onload = () => context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    image.src = signature;
+  }, [signature]);
 
   const getPosition = (event: PointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -127,6 +168,46 @@ export default function Home() {
   const [signatures, setSignatures] = useState(["", ""]);
   const [isSavingPdf, setIsSavingPdf] = useState(false);
   const [pdfError, setPdfError] = useState("");
+  const [isHydrated, setIsHydrated] = useState(false);
+  const [storageError, setStorageError] = useState("");
+
+  useEffect(() => {
+    try {
+      const savedValue = window.localStorage.getItem(STORAGE_KEY);
+      if (savedValue) {
+        const parsedValue: unknown = JSON.parse(savedValue);
+        if (!isSavedAgreement(parsedValue)) {
+          throw new Error("Data perjanjian tersimpan tidak valid.");
+        }
+        setPoints(parsedValue.points);
+        setDate(parsedValue.date);
+        setPlace(parsedValue.place);
+        setSignatures(parsedValue.signatures);
+      }
+    } catch (error) {
+      console.error("Failed to load the saved agreement.", error);
+      setStorageError(
+        "Data tersimpan tidak dapat dibaca. Perubahan baru mungkin tidak tersimpan.",
+      );
+    } finally {
+      setIsHydrated(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isHydrated) return;
+
+    try {
+      const savedAgreement: SavedAgreement = { points, date, place, signatures };
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(savedAgreement));
+      setStorageError("");
+    } catch (error) {
+      console.error("Failed to save the agreement on this device.", error);
+      setStorageError(
+        "Perubahan gagal disimpan di perangkat ini. Periksa ruang penyimpanan browser.",
+      );
+    }
+  }, [date, isHydrated, place, points, signatures]);
 
   const addPoint = () => {
     const trimmedPoint = newPoint.trim();
@@ -307,7 +388,8 @@ export default function Home() {
             </button>
           </div>
           {pdfError && <p className="pdf-error" role="alert">{pdfError}</p>}
-          <p className="privacy-note"><span>♧</span> Perjanjian ini tersimpan di perangkatmu saja.</p>
+          {storageError && <p className="pdf-error" role="alert">{storageError}</p>}
+          <p className="privacy-note"><span>♧</span> Perjanjian tersimpan otomatis di perangkat ini.</p>
         </aside>
 
         <section className="preview-section" aria-label="Pratinjau surat perjanjian">
@@ -362,12 +444,12 @@ export default function Home() {
                 <div className="signature-area">
                   <div className="signature-column">
                     <p className="signature-role">Pihak Pertama</p>
-                    <SignaturePad label="Tanda tangan Agil" onChange={(value) => updateSignature(0, value)} />
+                    <SignaturePad label="Tanda tangan Agil" signature={signatures[0]} onChange={(value) => updateSignature(0, value)} />
                     <div className="signature-printed-name">Agil Pamungkas, S.Kom.</div>
                   </div>
                   <div className="signature-column">
                     <p className="signature-role">Pihak Kedua</p>
-                    <SignaturePad label="Tanda tangan Alia" onChange={(value) => updateSignature(1, value)} />
+                    <SignaturePad label="Tanda tangan Alia" signature={signatures[1]} onChange={(value) => updateSignature(1, value)} />
                     <div className="signature-printed-name">Alia Pramesti, S.M.</div>
                   </div>
                   <div className="heart-divider"><HeartMark /></div>
