@@ -121,6 +121,7 @@ export function downloadAgreementPdf({
       pdf.text(pageLines, x, y, {
         align,
         lineHeightFactor: LINE_HEIGHT_FACTOR,
+        maxWidth: contentWidth - indent,
       });
       y += pageLines.length * lineHeight;
       lineIndex += pageLines.length;
@@ -206,6 +207,7 @@ export function downloadAgreementPdf({
         pdf.text(pageLines, MARGIN_X + 12, y, {
           align: "justify",
           lineHeightFactor: LINE_HEIGHT_FACTOR,
+          maxWidth: contentWidth - 12,
         });
         y += pageLines.length * lineHeight;
         lineIndex += pageLines.length;
@@ -221,14 +223,26 @@ export function downloadAgreementPdf({
     { after: 4 },
   );
 
-  if (y + 84 > PAGE_BOTTOM) addPage();
+  const signatureLocation = `${place || "________________"}, ${formattedDate}`;
+  const signatureLocationLines = pdf.splitTextToSize(
+    signatureLocation,
+    contentWidth,
+  ) as string[];
+  const signatureLocationLineHeight =
+    (BODY_FONT_SIZE * 0.3528) * LINE_HEIGHT_FACTOR;
+  const signatureLocationExtraHeight =
+    (signatureLocationLines.length - 1) * signatureLocationLineHeight;
+
+  if (y + 84 + signatureLocationExtraHeight > PAGE_BOTTOM) addPage();
 
   pdf.setFont("times", "normal");
   pdf.setFontSize(BODY_FONT_SIZE);
-  pdf.text(`${place || "________________"}, ${formattedDate}`, PAGE_WIDTH / 2, y, {
+  pdf.text(signatureLocationLines, PAGE_WIDTH / 2, y, {
     align: "center",
+    lineHeightFactor: LINE_HEIGHT_FACTOR,
+    maxWidth: contentWidth,
   });
-  y += 10;
+  y += 10 + signatureLocationExtraHeight;
 
   const columnWidth = 72;
   const leftX = MARGIN_X + 4;
