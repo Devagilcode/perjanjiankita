@@ -220,29 +220,30 @@ button { cursor: pointer; }
   .document { width: 100%; min-height: 297mm; margin: 0; padding: 15mm 18mm 13mm; border: 0; box-shadow: none; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
   .document::before { inset: 5mm; }
   .document-inner { display: flex; min-height: calc(297mm - 28mm); flex-direction: column; }
-  .document-kicker { font-size: 9px; }
-  .document-heading h2 { font-size: 34px; }
-  .document-subtitle { font-size: 14px; }
-  .document-body { display: flex; flex: 1; flex-direction: column; justify-content: space-between; margin-top: 30px; }
-  .opening, .preamble, .closing { font-size: 12px; line-height: 1.75; }
+  .document-kicker { font-size: 9pt; }
+  .document-heading h2 { font: 400 18pt/1.2 "Times New Roman", Times, serif; }
+  .document-subtitle { font-size: 12pt; }
+  .document-body { display: flex; flex: 1; flex-direction: column; justify-content: space-between; margin-top: 26px; font-family: "Times New Roman", Times, serif; font-size: 12pt; }
+  .opening, .preamble, .closing { font-size: 12pt; line-height: 1.5; }
   .party-list { margin: 16px 0 18px 10px; }
-  .party-list p { display: block; margin-bottom: 9px; font-size: 12px; line-height: 1.6; }
+  .party-list p { display: block; margin-bottom: 9px; font-size: 12pt; line-height: 1.5; }
   .party-index { display: inline-block; margin-right: 6px; }
   .preamble { margin-bottom: 14px; }
   .agreement-list { gap: 10px; margin-bottom: 20px; }
-  .agreement-list li { font-size: 11.5px; line-height: 1.7; }
-  .agreement-number { font-size: 9px; }
+  .agreement-list li { font-size: 12pt; line-height: 1.5; }
+  .agreement-number { font-size: 12pt; }
   .closing { margin-top: 14px; }
-  .signature-date { margin: 22px 0 7px; font-size: 12px; }
-  .signature-role { font-size: 10px; }
+  .signature-date { margin: 22px 0 7px; font: 12pt "Times New Roman", Times, serif; }
+  .signature-role { font: italic 12pt "Times New Roman", Times, serif; }
   .signature-area { break-inside: avoid; }
   .signature-canvas { height: 96px; }
   .signature-hint { display: none; }
   .clear-signature { display: none; }
   .signature-area { gap: 14px; margin-right: -16px; margin-left: -16px; }
   .heart-divider { top: 42px; }
-  .signature-printed-name { min-height: 20px; font-size: 11px; }
+  .signature-printed-name { min-height: 24px; padding-top: 5px; font: 600 12pt "Times New Roman", Times, serif; }
   .stamp { width: 86px; height: 72px; margin-top: 10px; }
-  .stamp-top, .stamp-bottom { font-size: 6px; }
-  .document-footnote { margin-top: 12px; font-size: 9px; }
+  .stamp-top, .stamp-bottom { font-size: 7pt; }
+  .stamp strong { font-size: 14pt; }
+  .document-footnote { margin-top: 12px; font: italic 9pt "Times New Roman", Times, serif; }
 }
