@@ -198,6 +198,7 @@ export default function Home() {
   const [storageError, setStorageError] = useState("");
   const [shareMessage, setShareMessage] = useState("");
   const [shareError, setShareError] = useState("");
+  const [shareUrl, setShareUrl] = useState("");
 
   useEffect(() => {
     const sharedToken = new URLSearchParams(window.location.hash.slice(1)).get(
@@ -294,30 +295,48 @@ export default function Home() {
   const shareAgreement = async () => {
     setShareError("");
     setShareMessage("");
+    setShareUrl("");
     try {
       const agreement: SavedAgreement = { points, date, place, signatures };
       const shareUrl = new URL(window.location.href);
       shareUrl.hash = `agreement=${encodeSharedAgreement(agreement)}`;
 
       if (navigator.share) {
-        await navigator.share({
-          title: "Perjanjian Kita",
-          text: "Buka perjanjian kita",
-          url: shareUrl.toString(),
-        });
-      } else if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(shareUrl.toString());
-      } else {
-        window.prompt("Salin tautan berbagi ini:", shareUrl.toString());
+        try {
+          await navigator.share({
+            title: "Perjanjian Kita",
+            text: "Buka perjanjian kita",
+            url: shareUrl.toString(),
+          });
+          setShareMessage(
+            "Tautan berisi salinan perjanjian saat ini. Bagikan tautan baru jika ada perubahan.",
+          );
+          return;
+        } catch (error) {
+          if (error instanceof DOMException && error.name === "AbortError") return;
+          console.warn("The browser share menu could not open; trying clipboard.", error);
+        }
       }
-      setShareMessage(
-        "Tautan berisi salinan perjanjian saat ini. Bagikan tautan baru jika ada perubahan.",
-      );
+
+      try {
+        if (!navigator.clipboard?.writeText) {
+          throw new Error("Clipboard API is unavailable.");
+        }
+        await navigator.clipboard.writeText(shareUrl.toString());
+        setShareMessage(
+          "Tautan berhasil disalin. Tautan berisi salinan perjanjian saat ini; bagikan tautan baru jika ada perubahan.",
+        );
+      } catch (error) {
+        console.error("Failed to copy the agreement link.", error);
+        setShareUrl(shareUrl.toString());
+        setShareError(
+          "Salin otomatis gagal. Pilih tautan di bawah, lalu salin dan kirim ke Alia.",
+        );
+      }
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
       console.error("Failed to share the agreement.", error);
       setShareError(
-        "Tautan gagal dibagikan. Coba lagi atau gunakan browser yang mendukung berbagi.",
+        "Tautan gagal dibuat. Pastikan isi perjanjian tidak terlalu besar, lalu coba lagi.",
       );
     }
   };
@@ -483,6 +502,15 @@ export default function Home() {
           </div>
           {pdfError && <p className="pdf-error" role="alert">{pdfError}</p>}
           {shareError && <p className="pdf-error" role="alert">{shareError}</p>}
+          {shareUrl && (
+            <textarea
+              className="share-link"
+              aria-label="Tautan perjanjian untuk disalin"
+              value={shareUrl}
+              readOnly
+              onFocus={(event) => event.currentTarget.select()}
+            />
+          )}
           {shareMessage && <p className="share-status" role="status">{shareMessage}</p>}
           {storageError && <p className="pdf-error" role="alert">{storageError}</p>}
           <p className="privacy-note"><span>♧</span> Perjanjian tersimpan otomatis di perangkat ini.</p>

@@ -87,6 +87,7 @@ button { cursor: pointer; }
 .print-button svg, .pdf-button svg, .share-button svg { width: 17px; height: 17px; flex: 0 0 17px; }
 .pdf-error { margin: 9px 0 0; color: #a13d47; font-size: 11px; line-height: 1.5; }
 .share-status { margin: 9px 0 0; color: #6d8068; font-size: 11px; line-height: 1.5; text-align: center; }
+.share-link { width: 100%; height: 76px; margin-top: 8px; padding: 8px; border: 1px solid #e7d4d4; border-radius: 4px; color: #756a6c; background: white; font: 10px/1.4 var(--sans); overflow-wrap: anywhere; }
 .privacy-note { margin: 12px 0 0; color: #a49a99; text-align: center; font-size: 8px; }
 .privacy-note span { padding-right: 4px; color: #9c9b7a; }
 
