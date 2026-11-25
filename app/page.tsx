@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 
 const STORAGE_KEY = "perjanjiankita:agreement:v1";
+const MAX_SHARE_TOKEN_LENGTH = 100_000;
 const initialPoints = [
   "Kami sepakat untuk saling menghargai, menjaga kepercayaan, dan berkomunikasi dengan jujur dalam keadaan apa pun.",
   "Kami akan meluangkan waktu untuk satu sama lain dan menyelesaikan setiap perbedaan dengan kepala dingin.",
@@ -10,28 +11,53 @@ const initialPoints = [
 ];
 
 type SavedAgreement = {
-points: string[];
-date: string;
-place: string;
-signatures: string[];
+  points: string[];
+  date: string;
+  place: string;
+  signatures: string[];
 };
 
 function isSavedAgreement(value: unknown): value is SavedAgreement {
-if (typeof value !== "object" || value === null) return false;
-const saved = value as Record<string, unknown>;
-return (
-  Array.isArray(saved.points) &&
-  saved.points.every((point) => typeof point === "string") &&
-  typeof saved.date === "string" &&
-  typeof saved.place === "string" &&
-  Array.isArray(saved.signatures) &&
-  saved.signatures.length === 2 &&
-  saved.signatures.every(
-    (signature) =>
-      typeof signature === "string" &&
-      (!signature || /^data:image\/png;base64,[A-Za-z0-9+/]+=*$/.test(signature)),
-  )
-);
+  if (typeof value !== "object" || value === null) return false;
+  const saved = value as Record<string, unknown>;
+  return (
+    Array.isArray(saved.points) &&
+    saved.points.every((point) => typeof point === "string") &&
+    typeof saved.date === "string" &&
+    typeof saved.place === "string" &&
+    Array.isArray(saved.signatures) &&
+    saved.signatures.length === 2 &&
+    saved.signatures.every(
+      (signature) =>
+        typeof signature === "string" &&
+        (!signature || /^data:image\/png;base64,[A-Za-z0-9+/]+=*$/.test(signature)),
+    )
+  );
+}
+
+function encodeSharedAgreement(agreement: SavedAgreement) {
+  const bytes = new TextEncoder().encode(JSON.stringify(agreement));
+  let binary = "";
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function decodeSharedAgreement(token: string): SavedAgreement {
+  if (!token || token.length > MAX_SHARE_TOKEN_LENGTH) {
+    throw new Error("Tautan berbagi tidak valid atau terlalu panjang.");
+  }
+  const base64 = token.replace(/-/g, "+").replace(/_/g, "/");
+  const paddedBase64 = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
+  const bytes = Uint8Array.from(atob(paddedBase64), (character) =>
+    character.charCodeAt(0),
+  );
+  const value: unknown = JSON.parse(new TextDecoder().decode(bytes));
+  if (!isSavedAgreement(value)) {
+    throw new Error("Isi tautan berbagi tidak valid.");
+  }
+  return value;
 }
 
 function HeartMark() {
@@ -170,28 +196,55 @@ export default function Home() {
   const [pdfError, setPdfError] = useState("");
   const [isHydrated, setIsHydrated] = useState(false);
   const [storageError, setStorageError] = useState("");
+  const [shareMessage, setShareMessage] = useState("");
+  const [shareError, setShareError] = useState("");
 
   useEffect(() => {
-    try {
-      const savedValue = window.localStorage.getItem(STORAGE_KEY);
-      if (savedValue) {
-        const parsedValue: unknown = JSON.parse(savedValue);
-        if (!isSavedAgreement(parsedValue)) {
-          throw new Error("Data perjanjian tersimpan tidak valid.");
-        }
-        setPoints(parsedValue.points);
-        setDate(parsedValue.date);
-        setPlace(parsedValue.place);
-        setSignatures(parsedValue.signatures);
+    const sharedToken = new URLSearchParams(window.location.hash.slice(1)).get(
+      "agreement",
+    );
+    if (sharedToken) {
+      try {
+        const sharedAgreement = decodeSharedAgreement(sharedToken);
+        setPoints(sharedAgreement.points);
+        setDate(sharedAgreement.date);
+        setPlace(sharedAgreement.place);
+        setSignatures(sharedAgreement.signatures);
+        window.history.replaceState(
+          window.history.state,
+          "",
+          `${window.location.pathname}${window.location.search}`,
+        );
+        setShareMessage(
+          "Perjanjian dari tautan dimuat dan tersimpan di perangkat ini.",
+        );
+      } catch (error) {
+        console.error("Failed to load the shared agreement.", error);
+        setShareError(
+          "Tautan berbagi tidak valid atau terlalu panjang. Minta tautan baru.",
+        );
       }
-    } catch (error) {
-      console.error("Failed to load the saved agreement.", error);
-      setStorageError(
-        "Data tersimpan tidak dapat dibaca. Perubahan baru mungkin tidak tersimpan.",
-      );
-    } finally {
-      setIsHydrated(true);
+    } else {
+      try {
+        const savedValue = window.localStorage.getItem(STORAGE_KEY);
+        if (savedValue) {
+          const parsedValue: unknown = JSON.parse(savedValue);
+          if (!isSavedAgreement(parsedValue)) {
+            throw new Error("Data perjanjian tersimpan tidak valid.");
+          }
+          setPoints(parsedValue.points);
+          setDate(parsedValue.date);
+          setPlace(parsedValue.place);
+          setSignatures(parsedValue.signatures);
+        }
+      } catch (error) {
+        console.error("Failed to load the saved agreement.", error);
+        setStorageError(
+          "Data tersimpan tidak dapat dibaca. Perubahan baru mungkin tidak tersimpan.",
+        );
+      }
     }
+    setIsHydrated(true);
   }, []);
 
   useEffect(() => {
@@ -236,6 +289,37 @@ export default function Home() {
         signatureIndex === index ? signature : value,
       ),
     );
+  };
+
+  const shareAgreement = async () => {
+    setShareError("");
+    setShareMessage("");
+    try {
+      const agreement: SavedAgreement = { points, date, place, signatures };
+      const shareUrl = new URL(window.location.href);
+      shareUrl.hash = `agreement=${encodeSharedAgreement(agreement)}`;
+
+      if (navigator.share) {
+        await navigator.share({
+          title: "Perjanjian Kita",
+          text: "Buka perjanjian kita",
+          url: shareUrl.toString(),
+        });
+      } else if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(shareUrl.toString());
+      } else {
+        window.prompt("Salin tautan berbagi ini:", shareUrl.toString());
+      }
+      setShareMessage(
+        "Tautan berisi salinan perjanjian saat ini. Bagikan tautan baru jika ada perubahan.",
+      );
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      console.error("Failed to share the agreement.", error);
+      setShareError(
+        "Tautan gagal dibagikan. Coba lagi atau gunakan browser yang mendukung berbagi.",
+      );
+    }
   };
 
   const formattedDate = date
@@ -386,8 +470,20 @@ export default function Home() {
               </svg>
               {isSavingPdf ? "Membuat PDF..." : "Simpan PDF"}
             </button>
+            <button
+              type="button"
+              className="share-button"
+              onClick={shareAgreement}
+            >
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M7.5 10.5 12.5 7m-5 6 5 3M5.5 12a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5Zm9-6a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5Zm0 11a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5Z" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              Bagikan perjanjian
+            </button>
           </div>
           {pdfError && <p className="pdf-error" role="alert">{pdfError}</p>}
+          {shareError && <p className="pdf-error" role="alert">{shareError}</p>}
+          {shareMessage && <p className="share-status" role="status">{shareMessage}</p>}
           {storageError && <p className="pdf-error" role="alert">{storageError}</p>}
           <p className="privacy-note"><span>♧</span> Perjanjian tersimpan otomatis di perangkat ini.</p>
         </aside>
