@@ -125,6 +125,8 @@ export default function Home() {
   const [date, setDate] = useState("");
   const [place, setPlace] = useState("");
   const [signatures, setSignatures] = useState(["", ""]);
+  const [isSavingPdf, setIsSavingPdf] = useState(false);
+  const [pdfError, setPdfError] = useState("");
 
   const addPoint = () => {
     const trimmedPoint = newPoint.trim();
@@ -162,6 +164,29 @@ export default function Home() {
         year: "numeric",
       }).format(new Date(`${date}T00:00:00`))
     : "________________________";
+
+  const savePdf = async () => {
+    setPdfError("");
+    setIsSavingPdf(true);
+    try {
+      const { downloadAgreementPdf } = await import("@/lib/agreement-pdf");
+      downloadAgreementPdf({
+        place: place || "________________",
+        formattedDate,
+        points,
+        signatures,
+      });
+    } catch (error) {
+      console.error("Failed to generate the agreement PDF.", error);
+      setPdfError(
+        error instanceof Error
+          ? `PDF gagal dibuat: ${error.message}`
+          : "PDF gagal dibuat. Silakan coba lagi.",
+      );
+    } finally {
+      setIsSavingPdf(false);
+    }
+  };
 
   return (
     <main className="site-shell">
@@ -261,14 +286,27 @@ export default function Home() {
             <span className="tip-icon">✳</span>
             <p>Kesepakatan terbaik lahir dari obrolan yang jujur. Sesuaikan setiap poin dengan cerita kalian.</p>
           </div>
-          <button type="button" className="print-button" onClick={() => window.print()}>
-            <svg viewBox="0 0 20 20" aria-hidden="true">
-              <path d="M5 7V2h10v5M5 14H3V8h14v6h-2M5 12h10v6H5z" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
-              <path d="M14 10h1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-            </svg>
-            Cetak / simpan PDF
-            <span>↗</span>
-          </button>
+          <div className="export-actions">
+            <button type="button" className="print-button" onClick={() => window.print()}>
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M5 7V2h10v5M5 14H3V8h14v6h-2M5 12h10v6H5z" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+                <path d="M14 10h1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+              Cetak surat
+            </button>
+            <button
+              type="button"
+              className="pdf-button"
+              onClick={savePdf}
+              disabled={isSavingPdf}
+            >
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M10 2v10m0 0 4-4m-4 4L6 8M3 14v3h14v-3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              {isSavingPdf ? "Membuat PDF..." : "Simpan PDF"}
+            </button>
+          </div>
+          {pdfError && <p className="pdf-error" role="alert">{pdfError}</p>}
           <p className="privacy-note"><span>♧</span> Perjanjian ini tersimpan di perangkatmu saja.</p>
         </aside>
 

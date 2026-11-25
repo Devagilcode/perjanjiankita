@@ -75,10 +75,15 @@ button { cursor: pointer; }
 .editor-tip { display: flex; gap: 9px; margin: 20px 0 17px; padding: 11px; background: #faf5f2; border-radius: 4px; }
 .tip-icon { color: #b77880; font-size: 15px; }
 .editor-tip p { margin: 0; color: #887b7b; font: italic 10px/1.6 var(--serif); }
-.print-button { width: 100%; height: 43px; display: flex; align-items: center; justify-content: center; gap: 9px; border: none; border-radius: 4px; color: white; background: var(--rose); font-size: 11px; font-weight: 600; transition: background .2s; }
+.export-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.print-button, .pdf-button { width: 100%; min-width: 0; height: 43px; display: flex; align-items: center; justify-content: center; gap: 7px; border-radius: 4px; font-size: 11px; font-weight: 600; transition: background .2s, border-color .2s; }
+.print-button { border: none; color: white; background: var(--rose); }
 .print-button:hover { background: var(--rose-dark); }
-.print-button svg { width: 17px; height: 17px; }
-.print-button > span { margin-left: 1px; font-size: 15px; font-weight: 400; }
+.pdf-button { border: 1px solid #e7d4d4; color: var(--rose-dark); background: #fbf3f2; }
+.pdf-button:hover { background: #f5e6e5; }
+.pdf-button:disabled { cursor: wait; opacity: .7; }
+.print-button svg, .pdf-button svg { width: 17px; height: 17px; flex: 0 0 17px; }
+.pdf-error { margin: 9px 0 0; color: #a13d47; font-size: 11px; line-height: 1.5; }
 .privacy-note { margin: 12px 0 0; color: #a49a99; text-align: center; font-size: 8px; }
 .privacy-note span { padding-right: 4px; color: #9c9b7a; }
 
@@ -181,7 +186,9 @@ button { cursor: pointer; }
   .editor-tip { padding: 12px; }
   .tip-icon { font-size: 18px; }
   .editor-tip p { font-size: 12px; }
-  .print-button { height: 48px; font-size: 14px; }
+  .export-actions { grid-template-columns: 1fr; }
+  .print-button, .pdf-button { height: 48px; font-size: 14px; }
+  .pdf-error { font-size: 12px; }
   .privacy-note { font-size: 10px; }
   .preview-topline .eyebrow { font-size: 9px; }
   .preview-subtitle { font-size: 12px; }
