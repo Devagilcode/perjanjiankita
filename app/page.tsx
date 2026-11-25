@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type PointerEvent } from "react";
 
 const STORAGE_KEY = "perjanjiankita:agreement:v1";
 const MAX_SHARE_TOKEN_LENGTH = 100_000;
+const MAX_DECOMPRESSED_SHARE_SIZE = 5 * 1024 * 1024;
 const initialPoints = [
   "Kami sepakat untuk saling menghargai, menjaga kepercayaan, dan berkomunikasi dengan jujur dalam keadaan apa pun.",
   "Kami akan meluangkan waktu untuk satu sama lain dan menyelesaikan setiap perbedaan dengan kepala dingin.",
@@ -35,27 +36,149 @@ function isSavedAgreement(value: unknown): value is SavedAgreement {
   );
 }
 
-function encodeSharedAgreement(agreement: SavedAgreement) {
-  const bytes = new TextEncoder().encode(JSON.stringify(agreement));
+function toBase64Url(bytes: Uint8Array) {
   let binary = "";
-  bytes.forEach((byte) => {
-    binary += String.fromCharCode(byte);
-  });
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-function decodeSharedAgreement(token: string): SavedAgreement {
-  if (!token || token.length > MAX_SHARE_TOKEN_LENGTH) {
-    throw new Error("Tautan berbagi tidak valid atau terlalu panjang.");
+function toBase64(bytes: Uint8Array) {
+  const base64Url = toBase64Url(bytes).replace(/-/g, "+").replace(/_/g, "/");
+  return base64Url.padEnd(Math.ceil(base64Url.length / 4) * 4, "=");
+}
+
+function fromBase64Url(token: string) {
+  if (!/^[A-Za-z0-9_-]+$/.test(token)) {
+    throw new Error("Tautan berisi karakter yang tidak valid.");
   }
   const base64 = token.replace(/-/g, "+").replace(/_/g, "/");
   const paddedBase64 = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
-  const bytes = Uint8Array.from(atob(paddedBase64), (character) =>
+  return Uint8Array.from(atob(paddedBase64), (character) =>
     character.charCodeAt(0),
   );
-  const value: unknown = JSON.parse(new TextDecoder().decode(bytes));
+}
+
+async function decompressSharedData(compressed: Uint8Array) {
+  const compressedCopy = new Uint8Array(compressed);
+  const reader = new Blob([compressedCopy.buffer as ArrayBuffer])
+    .stream()
+    .pipeThrough(new DecompressionStream("gzip"))
+    .getReader();
+  const chunks: Uint8Array[] = [];
+  let totalSize = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    totalSize += value.byteLength;
+    if (totalSize > MAX_DECOMPRESSED_SHARE_SIZE) {
+      await reader.cancel();
+      throw new Error("Data perjanjian dalam tautan terlalu besar.");
+    }
+    chunks.push(value);
+  }
+
+  const result = new Uint8Array(totalSize);
+  let offset = 0;
+  chunks.forEach((chunk) => {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  });
+  return result;
+}
+
+async function encodeSharedAgreement(agreement: SavedAgreement) {
+  const metadata = new TextEncoder().encode(
+    JSON.stringify({
+      points: agreement.points,
+      date: agreement.date,
+      place: agreement.place,
+    }),
+  );
+  const signatures = agreement.signatures.map((signature) => {
+    if (!signature) return new Uint8Array();
+    const data = signature.slice("data:image/png;base64,".length);
+    const binary = atob(data);
+    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  });
+  const totalSize =
+    12 + metadata.length + signatures.reduce((size, image) => size + image.length, 0);
+  const bundle = new Uint8Array(totalSize);
+  const header = new DataView(bundle.buffer);
+  let offset = 0;
+  header.setUint32(offset, metadata.length);
+  offset += 4;
+  bundle.set(metadata, offset);
+  offset += metadata.length;
+  signatures.forEach((image) => {
+    header.setUint32(offset, image.length);
+    offset += 4;
+    bundle.set(image, offset);
+    offset += image.length;
+  });
+
+  const compressed = await new Response(
+    new Blob([bundle]).stream().pipeThrough(new CompressionStream("gzip")),
+  ).arrayBuffer();
+  return `v2-${toBase64Url(new Uint8Array(compressed))}`;
+}
+
+async function decodeSharedAgreement(token: string): Promise<SavedAgreement> {
+  if (!token || token.length > MAX_SHARE_TOKEN_LENGTH) {
+    throw new Error("Tautan terpotong atau terlalu panjang.");
+  }
+
+  if (!token.startsWith("v2-")) {
+    const bytes = fromBase64Url(token);
+    const value: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    if (!isSavedAgreement(value)) {
+      throw new Error("Format tautan lama tidak dikenali.");
+    }
+    return value;
+  }
+
+  const compressed = fromBase64Url(token.slice(3));
+  const bytes = await decompressSharedData(compressed);
+  if (bytes.length < 12) throw new Error("Tautan tidak lengkap.");
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let offset = 0;
+  const metadataLength = view.getUint32(offset);
+  offset += 4;
+  if (metadataLength > bytes.length - offset) {
+    throw new Error("Data perjanjian dalam tautan terpotong.");
+  }
+  const metadata: unknown = JSON.parse(
+    new TextDecoder().decode(bytes.subarray(offset, offset + metadataLength)),
+  );
+  offset += metadataLength;
+  const signatures = [0, 1].map(() => {
+    if (offset + 4 > bytes.length) throw new Error("Data tanda tangan terpotong.");
+    const imageLength = view.getUint32(offset);
+    offset += 4;
+    if (imageLength > bytes.length - offset) {
+      throw new Error("Data tanda tangan terpotong.");
+    }
+    const image = bytes.subarray(offset, offset + imageLength);
+    offset += imageLength;
+    if (
+      image.length &&
+      ![137, 80, 78, 71, 13, 10, 26, 10].every((byte, index) => image[index] === byte)
+    ) {
+      throw new Error("Data gambar tanda tangan tidak valid.");
+    }
+    return image.length ? `data:image/png;base64,${toBase64(image)}` : "";
+  });
+  if (offset !== bytes.length) throw new Error("Tautan berisi data tambahan yang tidak valid.");
+
+  const value: unknown =
+    typeof metadata === "object" && metadata !== null
+      ? { ...metadata, signatures }
+      : metadata;
   if (!isSavedAgreement(value)) {
-    throw new Error("Isi tautan berbagi tidak valid.");
+    throw new Error("Format data perjanjian dalam tautan tidak dikenali.");
   }
   return value;
 }
@@ -201,51 +324,54 @@ export default function Home() {
   const [shareUrl, setShareUrl] = useState("");
 
   useEffect(() => {
-    const sharedToken = new URLSearchParams(window.location.hash.slice(1)).get(
-      "agreement",
-    );
-    if (sharedToken) {
-      try {
-        const sharedAgreement = decodeSharedAgreement(sharedToken);
-        setPoints(sharedAgreement.points);
-        setDate(sharedAgreement.date);
-        setPlace(sharedAgreement.place);
-        setSignatures(sharedAgreement.signatures);
-        window.history.replaceState(
-          window.history.state,
-          "",
-          `${window.location.pathname}${window.location.search}`,
-        );
-        setShareMessage(
-          "Perjanjian dari tautan dimuat dan tersimpan di perangkat ini.",
-        );
-      } catch (error) {
-        console.error("Failed to load the shared agreement.", error);
-        setShareError(
-          "Tautan berbagi tidak valid atau terlalu panjang. Minta tautan baru.",
-        );
-      }
-    } else {
-      try {
-        const savedValue = window.localStorage.getItem(STORAGE_KEY);
-        if (savedValue) {
-          const parsedValue: unknown = JSON.parse(savedValue);
-          if (!isSavedAgreement(parsedValue)) {
-            throw new Error("Data perjanjian tersimpan tidak valid.");
-          }
-          setPoints(parsedValue.points);
-          setDate(parsedValue.date);
-          setPlace(parsedValue.place);
-          setSignatures(parsedValue.signatures);
+    const loadAgreement = async () => {
+      const sharedToken = new URLSearchParams(window.location.hash.slice(1)).get(
+        "agreement",
+      );
+      if (sharedToken) {
+        try {
+          const sharedAgreement = await decodeSharedAgreement(sharedToken);
+          setPoints(sharedAgreement.points);
+          setDate(sharedAgreement.date);
+          setPlace(sharedAgreement.place);
+          setSignatures(sharedAgreement.signatures);
+          window.history.replaceState(
+            window.history.state,
+            "",
+            `${window.location.pathname}${window.location.search}`,
+          );
+          setShareMessage(
+            "Perjanjian dari tautan dimuat dan tersimpan di perangkat ini.",
+          );
+        } catch (error) {
+          console.error("Failed to load the shared agreement.", error);
+          setShareError(
+            `Tautan tidak dapat dibuka: ${error instanceof Error ? error.message : "formatnya tidak dikenali."}`,
+          );
         }
-      } catch (error) {
-        console.error("Failed to load the saved agreement.", error);
-        setStorageError(
-          "Data tersimpan tidak dapat dibaca. Perubahan baru mungkin tidak tersimpan.",
-        );
+      } else {
+        try {
+          const savedValue = window.localStorage.getItem(STORAGE_KEY);
+          if (savedValue) {
+            const parsedValue: unknown = JSON.parse(savedValue);
+            if (!isSavedAgreement(parsedValue)) {
+              throw new Error("Data perjanjian tersimpan tidak valid.");
+            }
+            setPoints(parsedValue.points);
+            setDate(parsedValue.date);
+            setPlace(parsedValue.place);
+            setSignatures(parsedValue.signatures);
+          }
+        } catch (error) {
+          console.error("Failed to load the saved agreement.", error);
+          setStorageError(
+            "Data tersimpan tidak dapat dibaca. Perubahan baru mungkin tidak tersimpan.",
+          );
+        }
       }
-    }
-    setIsHydrated(true);
+      setIsHydrated(true);
+    };
+    void loadAgreement();
   }, []);
 
   useEffect(() => {
@@ -299,7 +425,13 @@ export default function Home() {
     try {
       const agreement: SavedAgreement = { points, date, place, signatures };
       const shareUrl = new URL(window.location.href);
-      shareUrl.hash = `agreement=${encodeSharedAgreement(agreement)}`;
+      const token = await encodeSharedAgreement(agreement);
+      if (token.length > MAX_SHARE_TOKEN_LENGTH) {
+        throw new Error(
+          "Tautan masih terlalu besar untuk dibagikan. Hapus tanda tangan lalu gambar ulang dengan garis lebih sederhana.",
+        );
+      }
+      shareUrl.hash = `agreement=${token}`;
 
       if (navigator.share) {
         try {
