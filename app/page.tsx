@@ -1,0 +1,351 @@
+"use client";
+
+import { useRef, useState, type PointerEvent } from "react";
+
+const initialPoints = [
+  "Kami sepakat untuk saling menghargai, menjaga kepercayaan, dan berkomunikasi dengan jujur dalam keadaan apa pun.",
+  "Kami akan meluangkan waktu untuk satu sama lain dan menyelesaikan setiap perbedaan dengan kepala dingin.",
+  "Kami berkomitmen untuk saling mendukung dalam bertumbuh, meraih cita-cita, dan menjaga kebahagiaan bersama.",
+];
+
+function HeartMark() {
+  return (
+    <svg
+      className="heart-mark"
+      viewBox="0 0 96 88"
+      role="img"
+      aria-label="Ilustrasi hati"
+    >
+      <path
+        d="M48 76 14.5 44.2C-2 27.5 9.4 7 27 7c9.1 0 16.3 5.2 21 13.2C52.7 12.2 59.9 7 69 7c17.6 0 29 20.5 12.5 37.2L48 76Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M4 42h20l8-13 12 30 10-19 7 10h31"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function SignaturePad({
+  label,
+  onChange,
+}: {
+  label: string;
+  onChange: (signature: string) => void;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+
+  const getPosition = (event: PointerEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const bounds = canvas.getBoundingClientRect();
+    return {
+      x: ((event.clientX - bounds.left) / bounds.width) * canvas.width,
+      y: ((event.clientY - bounds.top) / bounds.height) * canvas.height,
+    };
+  };
+
+  const startDrawing = (event: PointerEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const { x, y } = getPosition(event);
+    context.beginPath();
+    context.moveTo(x, y);
+    context.strokeStyle = "#342d31";
+    context.lineWidth = 2.2;
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    setIsDrawing(true);
+  };
+
+  const draw = (event: PointerEvent<HTMLCanvasElement>) => {
+    if (!isDrawing) return;
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) return;
+    const { x, y } = getPosition(event);
+    context.lineTo(x, y);
+    context.stroke();
+  };
+
+  const finishDrawing = () => {
+    if (!isDrawing) return;
+    setIsDrawing(false);
+    const canvas = canvasRef.current;
+    if (canvas) onChange(canvas.toDataURL("image/png"));
+  };
+
+  const clearSignature = () => {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) return;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    onChange("");
+  };
+
+  return (
+    <div className="signature-field">
+      <div className="signature-field-heading">
+        <span>{label}</span>
+        <button type="button" className="clear-signature" onClick={clearSignature}>
+          Hapus
+        </button>
+      </div>
+      <canvas
+        ref={canvasRef}
+        className="signature-canvas"
+        width={600}
+        height={180}
+        aria-label={`Area tanda tangan ${label}`}
+        onPointerDown={startDrawing}
+        onPointerMove={draw}
+        onPointerUp={finishDrawing}
+        onPointerCancel={finishDrawing}
+      />
+      <span className="signature-hint">Gambar tanda tangan di area ini</span>
+    </div>
+  );
+}
+
+export default function Home() {
+  const [points, setPoints] = useState(initialPoints);
+  const [newPoint, setNewPoint] = useState("");
+  const [date, setDate] = useState("");
+  const [place, setPlace] = useState("");
+  const [signatures, setSignatures] = useState(["", ""]);
+
+  const addPoint = () => {
+    const trimmedPoint = newPoint.trim();
+    if (!trimmedPoint) return;
+    setPoints((currentPoints) => [...currentPoints, trimmedPoint]);
+    setNewPoint("");
+  };
+
+  const updatePoint = (index: number, value: string) => {
+    setPoints((currentPoints) =>
+      currentPoints.map((point, pointIndex) =>
+        pointIndex === index ? value : point,
+      ),
+    );
+  };
+
+  const removePoint = (index: number) => {
+    setPoints((currentPoints) =>
+      currentPoints.filter((_, pointIndex) => pointIndex !== index),
+    );
+  };
+
+  const updateSignature = (index: number, signature: string) => {
+    setSignatures((currentSignatures) =>
+      currentSignatures.map((value, signatureIndex) =>
+        signatureIndex === index ? signature : value,
+      ),
+    );
+  };
+
+  const formattedDate = date
+    ? new Intl.DateTimeFormat("id-ID", {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+      }).format(new Date(`${date}T00:00:00`))
+    : "________________________";
+
+  return (
+    <main className="site-shell">
+      <header className="topbar">
+        <a className="brand" href="#" aria-label="Perjanjian Kita, beranda">
+          <span className="brand-icon"><HeartMark /></span>
+          <span>perjanjian<span className="brand-light">kita</span></span>
+        </a>
+        <span className="topbar-note">Dibuat dengan sepenuh hati <span>♡</span></span>
+      </header>
+
+      <section className="intro">
+        <div className="intro-copy">
+          <p className="eyebrow"><span className="eyebrow-line" /> CERITA KITA, JANJI KITA</p>
+          <h1>Kesepakatan kecil,<br /><em>makna yang besar.</em></h1>
+          <p className="intro-description">
+            Tuangkan hal-hal yang ingin kalian jaga bersama. Tulis, tanda tangani,
+            lalu simpan sebagai pengingat manis perjalanan kalian.
+          </p>
+        </div>
+        <div className="intro-decoration" aria-hidden="true">
+          <span className="decoration-sparkle">✳</span>
+          <HeartMark />
+          <span className="decoration-caption">always, in all ways</span>
+        </div>
+      </section>
+
+      <div className="workspace">
+        <aside className="editor-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">RUANG MENYUSUN</p>
+              <h2>Atur perjanjian</h2>
+            </div>
+            <span className="step-badge">01 — 03</span>
+          </div>
+
+          <label className="field-label" htmlFor="place">Tempat</label>
+          <input
+            id="place"
+            className="text-input"
+            placeholder="Contoh: Jakarta"
+            value={place}
+            onChange={(event) => setPlace(event.target.value)}
+          />
+
+          <label className="field-label date-label" htmlFor="date">Tanggal perjanjian</label>
+          <input
+            id="date"
+            className="text-input"
+            type="date"
+            value={date}
+            onChange={(event) => setDate(event.target.value)}
+          />
+
+          <div className="points-heading">
+            <label className="field-label" htmlFor="new-point">Poin-poin kesepakatan</label>
+            <span>{points.length} poin</span>
+          </div>
+          <div className="point-editor-list">
+            {points.map((point, index) => (
+              <div className="point-editor" key={index}>
+                <span className="point-number">{String(index + 1).padStart(2, "0")}</span>
+                <textarea
+                  aria-label={`Isi poin ${index + 1}`}
+                  value={point}
+                  rows={2}
+                  onChange={(event) => updatePoint(index, event.target.value)}
+                />
+                <button
+                  type="button"
+                  className="remove-point"
+                  aria-label={`Hapus poin ${index + 1}`}
+                  onClick={() => removePoint(index)}
+                >×</button>
+              </div>
+            ))}
+          </div>
+          <div className="add-point-row">
+            <input
+              id="new-point"
+              className="text-input"
+              placeholder="Tulis kesepakatan baru..."
+              value={newPoint}
+              onChange={(event) => setNewPoint(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  addPoint();
+                }
+              }}
+            />
+            <button type="button" className="add-button" onClick={addPoint}>+</button>
+          </div>
+
+          <div className="editor-tip">
+            <span className="tip-icon">✳</span>
+            <p>Kesepakatan terbaik lahir dari obrolan yang jujur. Sesuaikan setiap poin dengan cerita kalian.</p>
+          </div>
+          <button type="button" className="print-button" onClick={() => window.print()}>
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="M5 7V2h10v5M5 14H3V8h14v6h-2M5 12h10v6H5z" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+              <path d="M14 10h1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+            Cetak / simpan PDF
+            <span>↗</span>
+          </button>
+          <p className="privacy-note"><span>♧</span> Perjanjian ini tersimpan di perangkatmu saja.</p>
+        </aside>
+
+        <section className="preview-section" aria-label="Pratinjau surat perjanjian">
+          <div className="preview-topline">
+            <div>
+              <p className="eyebrow">PRATINJAU DOKUMEN</p>
+              <span className="preview-subtitle">Begini tampilan perjanjian kalian</span>
+            </div>
+            <span className="paper-count">A4 <span>·</span> 1 halaman</span>
+          </div>
+
+          <article className="document">
+            <div className="document-inner">
+              <div className="document-heading">
+                <div className="document-ornament">✳</div>
+                <p className="document-kicker">DIBUAT DENGAN KASIH &amp; KEPERCAYAAN</p>
+                <h2>Surat Perjanjian</h2>
+                <div className="document-subtitle"><span /> Kesepakatan Bersama <span /></div>
+              </div>
+
+              <div className="document-body">
+                <p className="opening">
+                  Pada hari ini, {formattedDate}, bertempat di {place || "________________"}, kami yang
+                  bertanda tangan di bawah ini:
+                </p>
+                <div className="party-list">
+                  <p><span className="party-index">I.</span><strong>Agil Pamungkas, S.Kom.</strong>, selanjutnya disebut sebagai <em>Pihak Pertama</em>.</p>
+                  <p><span className="party-index">II.</span><strong>Alia Pramesti, S.M.</strong>, selanjutnya disebut sebagai <em>Pihak Kedua</em>.</p>
+                </div>
+                <p className="preamble">
+                  Dengan penuh kesadaran, ketulusan, dan rasa saling menyayangi, kedua belah
+                  pihak sepakat untuk mengikatkan diri dalam perjanjian ini. Kesepakatan ini
+                  dibuat sebagai pengingat atas niat baik dan komitmen kami untuk terus tumbuh
+                  bersama, dengan ketentuan sebagai berikut:
+                </p>
+
+                <ol className="agreement-list">
+                  {points.length === 0 ? (
+                    <li className="empty-agreement">Poin kesepakatan kalian akan muncul di sini.</li>
+                  ) : points.map((point, index) => (
+                    <li key={index}><span className="agreement-number">{String(index + 1).padStart(2, "0")}</span><span>{point || "—"}</span></li>
+                  ))}
+                </ol>
+
+                <p className="closing">
+                  Demikian perjanjian ini kami buat dengan itikad baik, tanpa paksaan dari
+                  pihak mana pun. Semoga setiap janji yang tertulis menjadi pengingat untuk
+                  senantiasa saling menjaga dan menyayangi.
+                </p>
+
+                <div className="signature-date">{place || "________________"}, {formattedDate}</div>
+                <div className="signature-area">
+                  <div className="signature-column">
+                    <p className="signature-role">Pihak Pertama</p>
+                    <SignaturePad label="Tanda tangan Agil" onChange={(value) => updateSignature(0, value)} />
+                    <div className="signature-printed-name">Agil Pamungkas, S.Kom.</div>
+                  </div>
+                  <div className="signature-column">
+                    <p className="signature-role">Pihak Kedua</p>
+                    <SignaturePad label="Tanda tangan Alia" onChange={(value) => updateSignature(1, value)} />
+                    <div className="signature-printed-name">Alia Pramesti, S.M.</div>
+                  </div>
+                  <div className="heart-divider"><HeartMark /></div>
+                </div>
+                <div className="stamp" aria-label="Materai sepuluh ribu rupiah">
+                  <span className="stamp-top">METERAI</span>
+                  <strong>Rp10.000</strong>
+                  <span className="stamp-bottom">TEMPEL DI SINI</span>
+                </div>
+                <p className="document-footnote">Dua hati, satu kesepakatan <span>♡</span></p>
+              </div>
+            </div>
+          </article>
+        </section>
+      </div>
+      <footer className="page-footer">Dibuat untuk dirayakan, bukan sekadar ditandatangani <span>♡</span></footer>
+    </main>
+  );
+}
