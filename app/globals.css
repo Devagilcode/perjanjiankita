@@ -211,23 +211,38 @@ button { cursor: pointer; }
 }
 
 @media print {
-  @page { size: A4; margin: 14mm; }
+  @page { size: A4 portrait; margin: 0; }
   body { background: white; }
   .site-shell { max-width: none; padding: 0; }
   .topbar, .intro, .editor-panel, .preview-topline, .page-footer { display: none !important; }
   .workspace { display: block; }
   .preview-section { width: 100%; }
-  .document { width: 100%; min-height: 0; margin: 0; padding: 17mm 17mm 12mm; border: 0; box-shadow: none; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  .document { width: 100%; min-height: 297mm; margin: 0; padding: 15mm 18mm 13mm; border: 0; box-shadow: none; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
   .document::before { inset: 5mm; }
-  .document-heading h2 { font-size: 28px; }
-  .document-body { margin-top: 20px; }
-  .signature-canvas { height: 88px; }
+  .document-inner { display: flex; min-height: calc(297mm - 28mm); flex-direction: column; }
+  .document-kicker { font-size: 9px; }
+  .document-heading h2 { font-size: 34px; }
+  .document-subtitle { font-size: 14px; }
+  .document-body { display: flex; flex: 1; flex-direction: column; justify-content: space-between; margin-top: 30px; }
+  .opening, .preamble, .closing { font-size: 12px; line-height: 1.75; }
+  .party-list { margin: 16px 0 18px 10px; }
+  .party-list p { display: block; margin-bottom: 9px; font-size: 12px; line-height: 1.6; }
+  .party-index { display: inline-block; margin-right: 6px; }
+  .preamble { margin-bottom: 14px; }
+  .agreement-list { gap: 10px; margin-bottom: 20px; }
+  .agreement-list li { font-size: 11.5px; line-height: 1.7; }
+  .agreement-number { font-size: 9px; }
+  .closing { margin-top: 14px; }
+  .signature-date { margin: 22px 0 7px; font-size: 12px; }
+  .signature-role { font-size: 10px; }
+  .signature-area { break-inside: avoid; }
+  .signature-canvas { height: 96px; }
   .signature-hint { display: none; }
   .clear-signature { display: none; }
   .signature-area { gap: 14px; margin-right: -16px; margin-left: -16px; }
   .heart-divider { top: 42px; }
-  .stamp { margin-top: 7px; }
-  .agreement-list { gap: 6px; }
-  .opening, .preamble, .closing, .party-list p { font-size: 10px; }
-  .agreement-list li { font-size: 9.5px; }
+  .signature-printed-name { min-height: 20px; font-size: 11px; }
+  .stamp { width: 86px; height: 72px; margin-top: 10px; }
+  .stamp-top, .stamp-bottom { font-size: 6px; }
+  .document-footnote { margin-top: 12px; font-size: 9px; }
 }
