@@ -1,187 +1,35 @@
 "use client";
 
-import { useEffect, useRef, useState, type PointerEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type PointerEvent,
+} from "react";
+import {
+  AGREEMENT_STORAGE_KEY,
+  createDefaultAgreement,
+  decodeSharedAgreement,
+  encodeSharedAgreement,
+  initialPoints,
+  isSavedAgreement,
+  type SavedAgreement,
+} from "@/lib/agreement";
+import {
+  clearGistSyncConfig,
+  createSharedGist,
+  decodePairingToken,
+  encodePairingToken,
+  fetchSharedGist,
+  loadGistSyncConfig,
+  saveGistSyncConfig,
+  updateSharedGist,
+  type GistSyncConfig,
+} from "@/lib/gist-sync";
 
-const STORAGE_KEY = "perjanjiankita:agreement:v1";
-const MAX_SHARE_TOKEN_LENGTH = 100_000;
-const MAX_DECOMPRESSED_SHARE_SIZE = 5 * 1024 * 1024;
-const initialPoints = [
-  "Kami sepakat untuk saling menghargai, menjaga kepercayaan, dan berkomunikasi dengan jujur dalam keadaan apa pun.",
-  "Kami akan meluangkan waktu untuk satu sama lain dan menyelesaikan setiap perbedaan dengan kepala dingin.",
-  "Kami berkomitmen untuk saling mendukung dalam bertumbuh, meraih cita-cita, dan menjaga kebahagiaan bersama.",
-];
-
-type SavedAgreement = {
-  points: string[];
-  date: string;
-  place: string;
-  signatures: string[];
-};
-
-function isSavedAgreement(value: unknown): value is SavedAgreement {
-  if (typeof value !== "object" || value === null) return false;
-  const saved = value as Record<string, unknown>;
-  return (
-    Array.isArray(saved.points) &&
-    saved.points.every((point) => typeof point === "string") &&
-    typeof saved.date === "string" &&
-    typeof saved.place === "string" &&
-    Array.isArray(saved.signatures) &&
-    saved.signatures.length === 2 &&
-    saved.signatures.every(
-      (signature) =>
-        typeof signature === "string" &&
-        (!signature || /^data:image\/png;base64,[A-Za-z0-9+/]+=*$/.test(signature)),
-    )
-  );
-}
-
-function toBase64Url(bytes: Uint8Array) {
-  let binary = "";
-  const chunkSize = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
-  }
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-function toBase64(bytes: Uint8Array) {
-  const base64Url = toBase64Url(bytes).replace(/-/g, "+").replace(/_/g, "/");
-  return base64Url.padEnd(Math.ceil(base64Url.length / 4) * 4, "=");
-}
-
-function fromBase64Url(token: string) {
-  if (!/^[A-Za-z0-9_-]+$/.test(token)) {
-    throw new Error("Tautan berisi karakter yang tidak valid.");
-  }
-  const base64 = token.replace(/-/g, "+").replace(/_/g, "/");
-  const paddedBase64 = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
-  return Uint8Array.from(atob(paddedBase64), (character) =>
-    character.charCodeAt(0),
-  );
-}
-
-async function decompressSharedData(compressed: Uint8Array) {
-  const compressedCopy = new Uint8Array(compressed);
-  const reader = new Blob([compressedCopy.buffer as ArrayBuffer])
-    .stream()
-    .pipeThrough(new DecompressionStream("gzip"))
-    .getReader();
-  const chunks: Uint8Array[] = [];
-  let totalSize = 0;
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    totalSize += value.byteLength;
-    if (totalSize > MAX_DECOMPRESSED_SHARE_SIZE) {
-      await reader.cancel();
-      throw new Error("Data perjanjian dalam tautan terlalu besar.");
-    }
-    chunks.push(value);
-  }
-
-  const result = new Uint8Array(totalSize);
-  let offset = 0;
-  chunks.forEach((chunk) => {
-    result.set(chunk, offset);
-    offset += chunk.byteLength;
-  });
-  return result;
-}
-
-async function encodeSharedAgreement(agreement: SavedAgreement) {
-  const metadata = new TextEncoder().encode(
-    JSON.stringify({
-      points: agreement.points,
-      date: agreement.date,
-      place: agreement.place,
-    }),
-  );
-  const signatures = agreement.signatures.map((signature) => {
-    if (!signature) return new Uint8Array();
-    const data = signature.slice("data:image/png;base64,".length);
-    const binary = atob(data);
-    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
-  });
-  const totalSize =
-    12 + metadata.length + signatures.reduce((size, image) => size + image.length, 0);
-  const bundle = new Uint8Array(totalSize);
-  const header = new DataView(bundle.buffer);
-  let offset = 0;
-  header.setUint32(offset, metadata.length);
-  offset += 4;
-  bundle.set(metadata, offset);
-  offset += metadata.length;
-  signatures.forEach((image) => {
-    header.setUint32(offset, image.length);
-    offset += 4;
-    bundle.set(image, offset);
-    offset += image.length;
-  });
-
-  const compressed = await new Response(
-    new Blob([bundle]).stream().pipeThrough(new CompressionStream("gzip")),
-  ).arrayBuffer();
-  return `v2-${toBase64Url(new Uint8Array(compressed))}`;
-}
-
-async function decodeSharedAgreement(token: string): Promise<SavedAgreement> {
-  if (!token || token.length > MAX_SHARE_TOKEN_LENGTH) {
-    throw new Error("Tautan terpotong atau terlalu panjang.");
-  }
-
-  if (!token.startsWith("v2-")) {
-    const bytes = fromBase64Url(token);
-    const value: unknown = JSON.parse(new TextDecoder().decode(bytes));
-    if (!isSavedAgreement(value)) {
-      throw new Error("Format tautan lama tidak dikenali.");
-    }
-    return value;
-  }
-
-  const compressed = fromBase64Url(token.slice(3));
-  const bytes = await decompressSharedData(compressed);
-  if (bytes.length < 12) throw new Error("Tautan tidak lengkap.");
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  let offset = 0;
-  const metadataLength = view.getUint32(offset);
-  offset += 4;
-  if (metadataLength > bytes.length - offset) {
-    throw new Error("Data perjanjian dalam tautan terpotong.");
-  }
-  const metadata: unknown = JSON.parse(
-    new TextDecoder().decode(bytes.subarray(offset, offset + metadataLength)),
-  );
-  offset += metadataLength;
-  const signatures = [0, 1].map(() => {
-    if (offset + 4 > bytes.length) throw new Error("Data tanda tangan terpotong.");
-    const imageLength = view.getUint32(offset);
-    offset += 4;
-    if (imageLength > bytes.length - offset) {
-      throw new Error("Data tanda tangan terpotong.");
-    }
-    const image = bytes.subarray(offset, offset + imageLength);
-    offset += imageLength;
-    if (
-      image.length &&
-      ![137, 80, 78, 71, 13, 10, 26, 10].every((byte, index) => image[index] === byte)
-    ) {
-      throw new Error("Data gambar tanda tangan tidak valid.");
-    }
-    return image.length ? `data:image/png;base64,${toBase64(image)}` : "";
-  });
-  if (offset !== bytes.length) throw new Error("Tautan berisi data tambahan yang tidak valid.");
-
-  const value: unknown =
-    typeof metadata === "object" && metadata !== null
-      ? { ...metadata, signatures }
-      : metadata;
-  if (!isSavedAgreement(value)) {
-    throw new Error("Format data perjanjian dalam tautan tidak dikenali.");
-  }
-  return value;
-}
+const LAST_SYNCED_SNAPSHOT_KEY = "perjanjiankita:synced-snapshot:v1";
 
 function HeartMark() {
   return (
@@ -220,9 +68,13 @@ function SignaturePad({
   onChange: (signature: string) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const renderedSignatureRef = useRef("");
   const [isDrawing, setIsDrawing] = useState(false);
 
   useEffect(() => {
+    if (signature === renderedSignatureRef.current) return;
+    renderedSignatureRef.current = signature;
+
     const canvas = canvasRef.current;
     const context = canvas?.getContext("2d");
     if (!canvas || !context) return;
@@ -230,9 +82,17 @@ function SignaturePad({
     context.clearRect(0, 0, canvas.width, canvas.height);
     if (!signature) return;
 
+    let cancelled = false;
     const image = new Image();
-    image.onload = () => context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    image.onload = () => {
+      if (cancelled) return;
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    };
     image.src = signature;
+    return () => {
+      cancelled = true;
+    };
   }, [signature]);
 
   const getPosition = (event: PointerEvent<HTMLCanvasElement>) => {
@@ -274,7 +134,10 @@ function SignaturePad({
     if (!isDrawing) return;
     setIsDrawing(false);
     const canvas = canvasRef.current;
-    if (canvas) onChange(canvas.toDataURL("image/png"));
+    if (!canvas) return;
+    const dataUrl = canvas.toDataURL("image/png");
+    renderedSignatureRef.current = dataUrl;
+    onChange(dataUrl);
   };
 
   const clearSignature = () => {
@@ -282,6 +145,7 @@ function SignaturePad({
     const context = canvas?.getContext("2d");
     if (!canvas || !context) return;
     context.clearRect(0, 0, canvas.width, canvas.height);
+    renderedSignatureRef.current = "";
     onChange("");
   };
 
@@ -309,89 +173,591 @@ function SignaturePad({
   );
 }
 
+function getBaseAppUrl(): string {
+  return `${window.location.origin}${window.location.pathname}`;
+}
+
 export default function Home() {
   const [points, setPoints] = useState(initialPoints);
   const [newPoint, setNewPoint] = useState("");
   const [date, setDate] = useState("");
   const [place, setPlace] = useState("");
   const [signatures, setSignatures] = useState(["", ""]);
+  const [isLocalReady, setIsLocalReady] = useState(false);
+
   const [isSavingPdf, setIsSavingPdf] = useState(false);
   const [pdfError, setPdfError] = useState("");
-  const [isHydrated, setIsHydrated] = useState(false);
   const [storageError, setStorageError] = useState("");
-  const [shareMessage, setShareMessage] = useState("");
-  const [shareError, setShareError] = useState("");
-  const [shareUrl, setShareUrl] = useState("");
 
-  useEffect(() => {
-    const loadAgreement = async () => {
-      const sharedToken = new URLSearchParams(window.location.hash.slice(1)).get(
-        "agreement",
-      );
-      if (sharedToken) {
-        try {
-          const sharedAgreement = await decodeSharedAgreement(sharedToken);
-          setPoints(sharedAgreement.points);
-          setDate(sharedAgreement.date);
-          setPlace(sharedAgreement.place);
-          setSignatures(sharedAgreement.signatures);
-          window.history.replaceState(
-            window.history.state,
-            "",
-            `${window.location.pathname}${window.location.search}`,
+  const [shareStatus, setShareStatus] = useState("");
+  const [shareLink, setShareLink] = useState("");
+
+  const [syncConfig, setSyncConfig] = useState<GistSyncConfig | null>(null);
+  const [syncStatus, setSyncStatus] = useState("Memuat data tersimpan...");
+  const [syncError, setSyncError] = useState("");
+  const [syncSuccessMessage, setSyncSuccessMessage] = useState("");
+  const [hasConflict, setHasConflict] = useState(false);
+  const [isSyncBusy, setIsSyncBusy] = useState(false);
+  const [saveRetry, setSaveRetry] = useState(0);
+
+  const [showSyncSetup, setShowSyncSetup] = useState(false);
+  const [setupMode, setSetupMode] = useState<"create" | "pair">("create");
+  const [tokenInput, setTokenInput] = useState("");
+  const [pairInput, setPairInput] = useState("");
+
+  const currentSnapshotRef = useRef("");
+  const lastRemoteSnapshotRef = useRef("");
+  const remoteVersionRef = useRef<string | null>(null);
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+
+  const agreement: SavedAgreement = { points, date, place, signatures };
+  const agreementSnapshot = JSON.stringify(agreement);
+  currentSnapshotRef.current = agreementSnapshot;
+
+  const applyAgreementState = useCallback((saved: SavedAgreement) => {
+    setPoints(saved.points);
+    setDate(saved.date);
+    setPlace(saved.place);
+    setSignatures(saved.signatures);
+    currentSnapshotRef.current = JSON.stringify(saved);
+  }, []);
+
+  const persistLocalAgreement = useCallback((snapshot: string) => {
+    try {
+      window.localStorage.setItem(AGREEMENT_STORAGE_KEY, snapshot);
+      setStorageError("");
+    } catch (error) {
+      console.error("Failed to save agreement to localStorage.", error);
+      setStorageError("Penyimpanan browser penuh atau diblokir.");
+    }
+  }, []);
+
+  const persistSyncedState = useCallback(
+    (config: GistSyncConfig, snapshot: string) => {
+      saveGistSyncConfig(config);
+      setSyncConfig(config);
+      remoteVersionRef.current = config.version;
+      lastRemoteSnapshotRef.current = snapshot;
+      try {
+        window.localStorage.setItem(LAST_SYNCED_SNAPSHOT_KEY, snapshot);
+      } catch {
+        // Ignore non-fatal localStorage quota errors for mirror key.
+      }
+    },
+    [],
+  );
+
+  const pullFromGist = useCallback(
+    async (
+      config: GistSyncConfig,
+      options: { isInitialLoad?: boolean; forceAcceptRemote?: boolean } = {},
+    ) => {
+      const remote = await fetchSharedGist(config.gistId, config.token);
+      if (!remote.agreement) {
+        if (options.isInitialLoad) {
+          const currentLocal = JSON.parse(
+            currentSnapshotRef.current,
+          ) as SavedAgreement;
+          const updated = await updateSharedGist(
+            config.gistId,
+            config.token,
+            currentLocal,
           );
-          setShareMessage(
-            "Perjanjian dari tautan dimuat dan tersimpan di perangkat ini.",
+          persistSyncedState(
+            { ...config, version: updated.version },
+            currentSnapshotRef.current,
           );
-        } catch (error) {
-          console.error("Failed to load the shared agreement.", error);
-          setShareError(
-            `Tautan tidak dapat dibuka: ${error instanceof Error ? error.message : "formatnya tidak dikenali."}`,
-          );
+          setSyncStatus("Tersinkron otomatis lintas jaringan");
         }
-      } else {
-        try {
-          const savedValue = window.localStorage.getItem(STORAGE_KEY);
-          if (savedValue) {
-            const parsedValue: unknown = JSON.parse(savedValue);
-            if (!isSavedAgreement(parsedValue)) {
-              throw new Error("Data perjanjian tersimpan tidak valid.");
-            }
-            setPoints(parsedValue.points);
-            setDate(parsedValue.date);
-            setPlace(parsedValue.place);
-            setSignatures(parsedValue.signatures);
+        return;
+      }
+
+      const remoteSnapshot = JSON.stringify(remote.agreement);
+      const localSnapshot = currentSnapshotRef.current;
+
+      if (options.forceAcceptRemote) {
+        applyAgreementState(remote.agreement);
+        persistLocalAgreement(remoteSnapshot);
+        persistSyncedState(
+          { ...config, version: remote.version },
+          remoteSnapshot,
+        );
+        setHasConflict(false);
+        setSyncError("");
+        setSyncStatus("Versi terbaru lintas jaringan dimuat.");
+        return;
+      }
+
+      if (remoteSnapshot === localSnapshot) {
+        persistSyncedState(
+          { ...config, version: remote.version },
+          remoteSnapshot,
+        );
+        setHasConflict(false);
+        setSyncError("");
+        setSyncStatus("Tersinkron otomatis lintas jaringan");
+        return;
+      }
+
+      let lastSyncedSnapshot = "";
+      try {
+        lastSyncedSnapshot =
+          window.localStorage.getItem(LAST_SYNCED_SNAPSHOT_KEY) || "";
+      } catch {
+        lastSyncedSnapshot = "";
+      }
+
+      const isFreshDeviceOrUnedited =
+        config.version === null ||
+        localSnapshot === lastSyncedSnapshot ||
+        localSnapshot === lastRemoteSnapshotRef.current;
+
+      if (isFreshDeviceOrUnedited) {
+        applyAgreementState(remote.agreement);
+        persistLocalAgreement(remoteSnapshot);
+        persistSyncedState(
+          { ...config, version: remote.version },
+          remoteSnapshot,
+        );
+        setHasConflict(false);
+        setSyncError("");
+        setSyncStatus("Perubahan terbaru dari pasangan dimuat.");
+        return;
+      }
+
+      if (config.version && remote.version === config.version) {
+        // Remote hasn't changed; local has offline changes waiting to push.
+        lastRemoteSnapshotRef.current = lastSyncedSnapshot || "";
+        remoteVersionRef.current = remote.version;
+        return;
+      }
+
+      setHasConflict(true);
+      setSyncStatus("Ada perbedaan isi antara perangkat ini dan cloud.");
+      setSyncError(
+        "Perangkat lain juga mengubah perjanjian. Pilih versi mana yang ingin dipakai.",
+      );
+    },
+    [applyAgreementState, persistLocalAgreement, persistSyncedState],
+  );
+
+  // Initial load: pairing link / share link / localStorage / Gist sync.
+  useEffect(() => {
+    let cancelled = false;
+
+    void (async () => {
+      let activeConfig = loadGistSyncConfig();
+      const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+      const queryParams = new URLSearchParams(window.location.search);
+
+      const pairingParam = hashParams.get("sync") || queryParams.get("sync");
+      const dataParam = hashParams.get("data") || queryParams.get("data");
+
+      let initialAgreement = createDefaultAgreement();
+      try {
+        const storedLocal = window.localStorage.getItem(AGREEMENT_STORAGE_KEY);
+        if (storedLocal) {
+          const parsed: unknown = JSON.parse(storedLocal);
+          if (isSavedAgreement(parsed)) {
+            initialAgreement = parsed;
           }
+        }
+      } catch (error) {
+        console.error("Failed to load local agreement.", error);
+        setStorageError("Data lokal sebelumnya tidak dapat dibaca.");
+      }
+
+      if (dataParam) {
+        try {
+          initialAgreement = await decodeSharedAgreement(dataParam);
+          persistLocalAgreement(JSON.stringify(initialAgreement));
+          setSyncSuccessMessage("Isi surat dari link snapshot berhasil dimuat.");
         } catch (error) {
-          console.error("Failed to load the saved agreement.", error);
-          setStorageError(
-            "Data tersimpan tidak dapat dibaca. Perubahan baru mungkin tidak tersimpan.",
+          setSyncError(
+            error instanceof Error
+              ? `Link snapshot tidak valid: ${error.message}`
+              : "Link snapshot tidak dapat dibaca.",
           );
         }
       }
-      setIsHydrated(true);
+
+      if (pairingParam) {
+        try {
+          const paired = decodePairingToken(pairingParam);
+          activeConfig = {
+            gistId: paired.gistId,
+            token: paired.token,
+            version: null,
+          };
+          saveGistSyncConfig(activeConfig);
+          setSyncSuccessMessage(
+            "Perangkat berhasil terhubung! Perubahan kalian sekarang sinkron otomatis.",
+          );
+        } catch (error) {
+          setSyncError(
+            error instanceof Error
+              ? error.message
+              : "Link pasangan tidak valid.",
+          );
+        }
+      }
+
+      if (pairingParam || dataParam) {
+        window.history.replaceState(null, "", getBaseAppUrl());
+      }
+
+      if (cancelled) return;
+      applyAgreementState(initialAgreement);
+
+      if (activeConfig) {
+        setSyncConfig(activeConfig);
+        remoteVersionRef.current = activeConfig.version;
+        try {
+          lastRemoteSnapshotRef.current =
+            window.localStorage.getItem(LAST_SYNCED_SNAPSHOT_KEY) || "";
+        } catch {
+          lastRemoteSnapshotRef.current = "";
+        }
+        setSyncStatus("Menyelaraskan data bersama...");
+        try {
+          await pullFromGist(activeConfig, { isInitialLoad: true });
+        } catch (error) {
+          if (!cancelled) {
+            setSyncError(
+              error instanceof Error
+                ? error.message
+                : "Gagal menyinkronkan data dari jaringan.",
+            );
+            setSyncStatus("Tersimpan lokal (menunggu koneksi)");
+          }
+        }
+      } else {
+        setSyncStatus("Tersimpan otomatis di perangkat ini");
+      }
+
+      if (!cancelled) {
+        setIsLocalReady(true);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
     };
-    void loadAgreement();
-  }, []);
+  }, [applyAgreementState, persistLocalAgreement, pullFromGist]);
 
+  // Immediate localStorage auto-save whenever fields change.
   useEffect(() => {
-    if (!isHydrated) return;
+    if (!isLocalReady) return;
+    persistLocalAgreement(agreementSnapshot);
+  }, [agreementSnapshot, isLocalReady, persistLocalAgreement]);
 
+  // Debounced automatic sync to GitHub Gist when configured.
+  useEffect(() => {
+    if (!isLocalReady || !syncConfig || hasConflict) return;
+    const retryDelay = Math.min(
+      2500 * 2 ** Math.min(Math.max(saveRetry - 1, 0), 4),
+      30_000,
+    );
+
+    const timeout = window.setTimeout(() => {
+      const snapshot = currentSnapshotRef.current;
+      if (snapshot === lastRemoteSnapshotRef.current) return;
+
+      const pushUpdate = async () => {
+        if (hasConflict || snapshot === lastRemoteSnapshotRef.current) return;
+        setSyncStatus("Menyimpan lintas jaringan...");
+        setSyncError("");
+        try {
+          // Check remote version first so we never silently overwrite partner edits.
+          const latest = await fetchSharedGist(syncConfig.gistId, syncConfig.token);
+          const remoteSnapshot = latest.agreement
+            ? JSON.stringify(latest.agreement)
+            : "";
+          if (
+            remoteVersionRef.current &&
+            latest.version &&
+            latest.version !== remoteVersionRef.current &&
+            remoteSnapshot &&
+            remoteSnapshot !== lastRemoteSnapshotRef.current &&
+            remoteSnapshot !== snapshot
+          ) {
+            setHasConflict(true);
+            setSyncStatus("Ada perubahan baru dari perangkat lain.");
+            setSyncError(
+              "Perubahan lokal ditahan agar tidak menimpa editan pasanganmu.",
+            );
+            return;
+          }
+
+          const payload = JSON.parse(snapshot) as SavedAgreement;
+          const updated = await updateSharedGist(
+            syncConfig.gistId,
+            syncConfig.token,
+            payload,
+          );
+          persistSyncedState(
+            { ...syncConfig, version: updated.version },
+            snapshot,
+          );
+          setSaveRetry(0);
+          setSyncStatus("Tersinkron otomatis lintas jaringan");
+        } catch (error) {
+          console.error("Failed to sync agreement to GitHub Gist.", error);
+          setSyncError(
+            error instanceof Error
+              ? error.message
+              : "Gagal menyinkronkan ke jaringan. Akan dicoba lagi.",
+          );
+          setSyncStatus("Tersimpan lokal (menunggu sinkronisasi)");
+          setSaveRetry((attempt) => attempt + 1);
+        }
+      };
+
+      saveQueueRef.current = saveQueueRef.current.then(pushUpdate, pushUpdate);
+    }, saveRetry ? retryDelay : 800);
+
+    return () => window.clearTimeout(timeout);
+  }, [
+    agreementSnapshot,
+    hasConflict,
+    isLocalReady,
+    persistSyncedState,
+    saveRetry,
+    syncConfig,
+  ]);
+
+  // Retry immediately when network returns, and poll for partner updates while visible.
+  useEffect(() => {
+    if (!isLocalReady || !syncConfig) return;
+
+    const refreshWhenIdle = () => {
+      if (
+        document.hidden ||
+        hasConflict ||
+        currentSnapshotRef.current !== lastRemoteSnapshotRef.current
+      ) {
+        return;
+      }
+      void pullFromGist(syncConfig).catch((error: unknown) => {
+        console.error("Background Gist sync check failed.", error);
+      });
+    };
+
+    const handleOnline = () => {
+      if (currentSnapshotRef.current !== lastRemoteSnapshotRef.current) {
+        setSaveRetry((attempt) => (attempt === 0 ? 1 : attempt));
+      } else {
+        refreshWhenIdle();
+      }
+    };
+
+    const interval = window.setInterval(refreshWhenIdle, 8_000);
+    window.addEventListener("focus", refreshWhenIdle);
+    document.addEventListener("visibilitychange", refreshWhenIdle);
+    window.addEventListener("online", handleOnline);
+
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refreshWhenIdle);
+      document.removeEventListener("visibilitychange", refreshWhenIdle);
+      window.removeEventListener("online", handleOnline);
+    };
+  }, [hasConflict, isLocalReady, pullFromGist, syncConfig]);
+
+  const handleCreateSync = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSyncError("");
+    setSyncSuccessMessage("");
+    setIsSyncBusy(true);
     try {
-      const savedAgreement: SavedAgreement = { points, date, place, signatures };
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(savedAgreement));
-      setStorageError("");
+      const currentAgreement = JSON.parse(
+        currentSnapshotRef.current,
+      ) as SavedAgreement;
+      const created = await createSharedGist(tokenInput, currentAgreement);
+      const nextConfig: GistSyncConfig = {
+        gistId: created.gistId,
+        token: tokenInput.trim(),
+        version: created.version,
+      };
+      persistSyncedState(nextConfig, currentSnapshotRef.current);
+      setTokenInput("");
+      setShowSyncSetup(false);
+      setHasConflict(false);
+      setSyncStatus("Tersinkron otomatis lintas jaringan");
+      setSyncSuccessMessage(
+        "Sinkronisasi aktif! Sekarang klik 'Salin Link Pasangan' untuk dikirim ke pacar.",
+      );
     } catch (error) {
-      console.error("Failed to save the agreement on this device.", error);
-      setStorageError(
-        "Perubahan gagal disimpan di perangkat ini. Periksa ruang penyimpanan browser.",
+      setSyncError(
+        error instanceof Error
+          ? error.message
+          : "Gagal mengaktifkan sinkronisasi.",
+      );
+    } finally {
+      setIsSyncBusy(false);
+    }
+  };
+
+  const handlePairSync = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSyncError("");
+    setSyncSuccessMessage("");
+    setIsSyncBusy(true);
+    try {
+      const paired = decodePairingToken(pairInput);
+      const nextConfig: GistSyncConfig = {
+        gistId: paired.gistId,
+        token: paired.token,
+        version: null,
+      };
+      saveGistSyncConfig(nextConfig);
+      setSyncConfig(nextConfig);
+      await pullFromGist(nextConfig, { isInitialLoad: true });
+      setPairInput("");
+      setShowSyncSetup(false);
+      setSyncSuccessMessage("Perangkat berhasil disambungkan dan disinkronkan!");
+    } catch (error) {
+      setSyncError(
+        error instanceof Error
+          ? error.message
+          : "Link pasangan tidak valid.",
+      );
+    } finally {
+      setIsSyncBusy(false);
+    }
+  };
+
+  const copyPairingLink = async () => {
+    if (!syncConfig) return;
+    setSyncError("");
+    setSyncSuccessMessage("");
+    const pairingToken = encodePairingToken(syncConfig.gistId, syncConfig.token);
+    const url = `${getBaseAppUrl()}#sync=${pairingToken}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setSyncSuccessMessage(
+        "Link pasangan tersalin! Kirim ke pacar—cukup buka 1x di HP-nya untuk sinkron otomatis.",
+      );
+    } catch {
+      setShareLink(url);
+      setSyncSuccessMessage(
+        "Salin link pasangan di kotak di bawah lalu kirim hanya ke pasanganmu.",
       );
     }
-  }, [date, isHydrated, place, points, signatures]);
+  };
+
+  const manualRefresh = async () => {
+    if (!syncConfig) return;
+    setIsSyncBusy(true);
+    setSyncError("");
+    setSyncSuccessMessage("");
+    try {
+      await pullFromGist(syncConfig);
+      setSyncSuccessMessage("Data sudah paling baru.");
+    } catch (error) {
+      setSyncError(
+        error instanceof Error ? error.message : "Gagal menyegarkan data.",
+      );
+    } finally {
+      setIsSyncBusy(false);
+    }
+  };
+
+  const resolveUseRemote = async () => {
+    if (!syncConfig) return;
+    setIsSyncBusy(true);
+    setSyncError("");
+    try {
+      await pullFromGist(syncConfig, { forceAcceptRemote: true });
+      setSyncSuccessMessage("Versi terbaru dari pasangan diterapkan.");
+    } catch (error) {
+      setSyncError(
+        error instanceof Error ? error.message : "Gagal memuat versi terbaru.",
+      );
+    } finally {
+      setIsSyncBusy(false);
+    }
+  };
+
+  const resolveKeepLocal = async () => {
+    if (!syncConfig) return;
+    setIsSyncBusy(true);
+    setSyncError("");
+    try {
+      const snapshot = currentSnapshotRef.current;
+      const updated = await updateSharedGist(
+        syncConfig.gistId,
+        syncConfig.token,
+        JSON.parse(snapshot) as SavedAgreement,
+      );
+      persistSyncedState({ ...syncConfig, version: updated.version }, snapshot);
+      setHasConflict(false);
+      setSyncStatus("Tersinkron otomatis lintas jaringan");
+      setSyncSuccessMessage("Versi perangkat ini berhasil disimpan ke semua perangkat.");
+    } catch (error) {
+      setSyncError(
+        error instanceof Error ? error.message : "Gagal menyimpan versi ini.",
+      );
+    } finally {
+      setIsSyncBusy(false);
+    }
+  };
+
+  const resetAgreement = () => {
+    if (
+      !window.confirm(
+        "Kembalikan isi surat dan tanda tangan ke template awal?",
+      )
+    ) {
+      return;
+    }
+    const fresh = createDefaultAgreement();
+    applyAgreementState(fresh);
+    persistLocalAgreement(JSON.stringify(fresh));
+    setSyncSuccessMessage("Surat dikembalikan ke template awal.");
+  };
+
+  const disconnectSync = () => {
+    if (
+      !window.confirm(
+        "Putuskan sinkronisasi Gist di perangkat ini? Data lokal tetap tersimpan di browser.",
+      )
+    ) {
+      return;
+    }
+    clearGistSyncConfig();
+    setSyncConfig(null);
+    remoteVersionRef.current = null;
+    lastRemoteSnapshotRef.current = "";
+    setHasConflict(false);
+    setSyncError("");
+    setSyncSuccessMessage("");
+    setSyncStatus("Tersimpan otomatis di perangkat ini");
+  };
+
+  const copyShareLink = async () => {
+    setPdfError("");
+    setShareStatus("");
+    try {
+      const token = await encodeSharedAgreement(agreement);
+      const url = `${getBaseAppUrl()}#data=${token}`;
+      setShareLink(url);
+      if (navigator.clipboard) {
+        await navigator.clipboard.writeText(url);
+        setShareStatus("Link snapshot tersalin ke clipboard.");
+      } else {
+        setShareStatus("Link snapshot siap disalin di bawah.");
+      }
+    } catch (error) {
+      console.error("Failed to create share link.", error);
+      setPdfError("Gagal membuat link snapshot.");
+    }
+  };
 
   const addPoint = () => {
     const trimmedPoint = newPoint.trim();
     if (!trimmedPoint) return;
+    if (points.length >= 100) return;
     setPoints((currentPoints) => [...currentPoints, trimmedPoint]);
     setNewPoint("");
   };
@@ -416,61 +782,6 @@ export default function Home() {
         signatureIndex === index ? signature : value,
       ),
     );
-  };
-
-  const shareAgreement = async () => {
-    setShareError("");
-    setShareMessage("");
-    setShareUrl("");
-    try {
-      const agreement: SavedAgreement = { points, date, place, signatures };
-      const shareUrl = new URL(window.location.href);
-      const token = await encodeSharedAgreement(agreement);
-      if (token.length > MAX_SHARE_TOKEN_LENGTH) {
-        throw new Error(
-          "Tautan masih terlalu besar untuk dibagikan. Hapus tanda tangan lalu gambar ulang dengan garis lebih sederhana.",
-        );
-      }
-      shareUrl.hash = `agreement=${token}`;
-
-      if (navigator.share) {
-        try {
-          await navigator.share({
-            title: "Perjanjian Kita",
-            text: "Buka perjanjian kita",
-            url: shareUrl.toString(),
-          });
-          setShareMessage(
-            "Tautan berisi salinan perjanjian saat ini. Bagikan tautan baru jika ada perubahan.",
-          );
-          return;
-        } catch (error) {
-          if (error instanceof DOMException && error.name === "AbortError") return;
-          console.warn("The browser share menu could not open; trying clipboard.", error);
-        }
-      }
-
-      try {
-        if (!navigator.clipboard?.writeText) {
-          throw new Error("Clipboard API is unavailable.");
-        }
-        await navigator.clipboard.writeText(shareUrl.toString());
-        setShareMessage(
-          "Tautan berhasil disalin. Tautan berisi salinan perjanjian saat ini; bagikan tautan baru jika ada perubahan.",
-        );
-      } catch (error) {
-        console.error("Failed to copy the agreement link.", error);
-        setShareUrl(shareUrl.toString());
-        setShareError(
-          "Salin otomatis gagal. Pilih tautan di bawah, lalu salin dan kirim ke Alia.",
-        );
-      }
-    } catch (error) {
-      console.error("Failed to share the agreement.", error);
-      setShareError(
-        "Tautan gagal dibuat. Pastikan isi perjanjian tidak terlalu besar, lalu coba lagi.",
-      );
-    }
   };
 
   const formattedDate = date
@@ -504,6 +815,12 @@ export default function Home() {
     }
   };
 
+  const syncStatusClass = syncError || hasConflict
+    ? "sync-status sync-error"
+    : syncConfig
+      ? "sync-status"
+      : "sync-status sync-local";
+
   return (
     <main className="site-shell">
       <header className="topbar">
@@ -511,7 +828,9 @@ export default function Home() {
           <span className="brand-icon"><HeartMark /></span>
           <span>perjanjian<span className="brand-light">kita</span></span>
         </a>
-        <span className="topbar-note">Dibuat dengan sepenuh hati <span>♡</span></span>
+        <div className="topbar-actions">
+          <span className="topbar-note">Dibuat dengan sepenuh hati <span>♡</span></span>
+        </div>
       </header>
 
       <section className="intro">
@@ -545,6 +864,7 @@ export default function Home() {
             id="place"
             className="text-input"
             placeholder="Contoh: Jakarta"
+            maxLength={200}
             value={place}
             onChange={(event) => setPlace(event.target.value)}
           />
@@ -570,6 +890,7 @@ export default function Home() {
                   aria-label={`Isi poin ${index + 1}`}
                   value={point}
                   rows={2}
+                  maxLength={4000}
                   onChange={(event) => updatePoint(index, event.target.value)}
                 />
                 <button
@@ -586,6 +907,7 @@ export default function Home() {
               id="new-point"
               className="text-input"
               placeholder="Tulis kesepakatan baru..."
+              maxLength={4000}
               value={newPoint}
               onChange={(event) => setNewPoint(event.target.value)}
               onKeyDown={(event) => {
@@ -597,11 +919,15 @@ export default function Home() {
             />
             <button type="button" className="add-button" onClick={addPoint}>+</button>
           </div>
+          {points.length >= 100 && (
+            <p className="sync-message">Jumlah poin maksimal adalah 100.</p>
+          )}
 
           <div className="editor-tip">
             <span className="tip-icon">✳</span>
             <p>Kesepakatan terbaik lahir dari obrolan yang jujur. Sesuaikan setiap poin dengan cerita kalian.</p>
           </div>
+
           <div className="export-actions">
             <button type="button" className="print-button" onClick={() => window.print()}>
               <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -621,31 +947,192 @@ export default function Home() {
               </svg>
               {isSavingPdf ? "Membuat PDF..." : "Simpan PDF"}
             </button>
-            <button
-              type="button"
-              className="share-button"
-              onClick={shareAgreement}
-            >
+            <button type="button" className="share-button" onClick={copyShareLink}>
               <svg viewBox="0 0 20 20" aria-hidden="true">
-                <path d="M7.5 10.5 12.5 7m-5 6 5 3M5.5 12a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5Zm9-6a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5Zm0 11a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5Z" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M8 12 12 8M10.5 5.5l1.8-1.8a3 3 0 1 1 4.2 4.2l-1.8 1.8M9.5 14.5l-1.8 1.8a3 3 0 1 1-4.2-4.2l1.8-1.8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
-              Bagikan perjanjian
+              Salin link snapshot
             </button>
           </div>
+
           {pdfError && <p className="pdf-error" role="alert">{pdfError}</p>}
-          {shareError && <p className="pdf-error" role="alert">{shareError}</p>}
-          {shareUrl && (
+          {storageError && <p className="pdf-error" role="alert">{storageError}</p>}
+          {shareStatus && <p className="share-status">{shareStatus}</p>}
+          {shareLink && (
             <textarea
               className="share-link"
-              aria-label="Tautan perjanjian untuk disalin"
-              value={shareUrl}
               readOnly
+              value={shareLink}
+              aria-label="Tautan yang bisa disalin"
               onFocus={(event) => event.currentTarget.select()}
             />
           )}
-          {shareMessage && <p className="share-status" role="status">{shareMessage}</p>}
-          {storageError && <p className="pdf-error" role="alert">{storageError}</p>}
-          <p className="privacy-note"><span>♧</span> Perjanjian tersimpan otomatis di perangkat ini.</p>
+
+          <div className="sync-panel" aria-live="polite">
+            <p className={syncStatusClass}>
+              <span className="sync-indicator" />
+              {syncStatus}
+            </p>
+            {syncError && <p className="sync-message" role="alert">{syncError}</p>}
+            {syncSuccessMessage && <p className="sync-success">{syncSuccessMessage}</p>}
+
+            {hasConflict && (
+              <div className="sync-actions-grid">
+                <button
+                  className="sync-primary-button"
+                  type="button"
+                  disabled={isSyncBusy}
+                  onClick={resolveUseRemote}
+                >
+                  Muat versi terbaru dari pasangan
+                </button>
+                <button
+                  className="sync-secondary-button"
+                  type="button"
+                  disabled={isSyncBusy}
+                  onClick={resolveKeepLocal}
+                >
+                  Timpa dengan versi perangkat ini
+                </button>
+              </div>
+            )}
+
+            {syncConfig ? (
+              <div className="sync-actions-grid">
+                <button
+                  className="sync-primary-button"
+                  type="button"
+                  onClick={copyPairingLink}
+                >
+                  Salin Link Pasangan (untuk Pacar)
+                </button>
+                <button
+                  className="sync-secondary-button"
+                  type="button"
+                  disabled={isSyncBusy}
+                  onClick={manualRefresh}
+                >
+                  {isSyncBusy ? "Menyegarkan..." : "Segarkan sekarang"}
+                </button>
+                <button
+                  className="sync-danger-button"
+                  type="button"
+                  onClick={resetAgreement}
+                >
+                  Reset isi surat
+                </button>
+                <button
+                  className="sync-text-button"
+                  type="button"
+                  onClick={disconnectSync}
+                >
+                  Putuskan sinkronisasi di perangkat ini
+                </button>
+              </div>
+            ) : (
+              <>
+                <p className="sync-hint">
+                  Aktifkan sinkronisasi GitHub Gist (tanpa database) supaya perubahanmu dan pacar otomatis tersimpan dari jaringan mana saja.
+                </p>
+                <div className="sync-actions-grid">
+                  <button
+                    className="sync-secondary-button"
+                    type="button"
+                    onClick={() => setShowSyncSetup((open) => !open)}
+                  >
+                    {showSyncSetup ? "Tutup pengaturan sinkronisasi" : "Aktifkan Sinkronisasi Lintas Jaringan"}
+                  </button>
+                  <button
+                    className="sync-danger-button"
+                    type="button"
+                    onClick={resetAgreement}
+                  >
+                    Reset isi surat
+                  </button>
+                </div>
+
+                {showSyncSetup && (
+                  <div className="sync-setup">
+                    <div className="sync-tabs">
+                      <button
+                        type="button"
+                        className={`sync-tab ${setupMode === "create" ? "sync-tab-active" : ""}`}
+                        onClick={() => setSetupMode("create")}
+                      >
+                        Buat Baru (HP 1)
+                      </button>
+                      <button
+                        type="button"
+                        className={`sync-tab ${setupMode === "pair" ? "sync-tab-active" : ""}`}
+                        onClick={() => setSetupMode("pair")}
+                      >
+                        Link Pasangan (HP 2)
+                      </button>
+                    </div>
+
+                    {setupMode === "create" ? (
+                      <form onSubmit={handleCreateSync}>
+                        <ol className="sync-steps">
+                          <li>
+                            Buat token GitHub (izin <strong>gist</strong>) di{" "}
+                            <a
+                              href="https://github.com/settings/tokens/new?scopes=gist&description=Perjanjian%20Kita"
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              halaman Token GitHub
+                            </a>.
+                          </li>
+                          <li>Tempel token di bawah lalu klik Hubungkan.</li>
+                          <li>Kirim <strong>Link Pasangan</strong> ke pacarmu (cukup buka 1x).</li>
+                        </ol>
+                        <input
+                          className="text-input"
+                          type="password"
+                          placeholder="Tempel GitHub Token (ghp_... / github_pat_...)"
+                          value={tokenInput}
+                          onChange={(event) => setTokenInput(event.target.value)}
+                          required
+                        />
+                        <button
+                          className="sync-primary-button"
+                          type="submit"
+                          disabled={isSyncBusy}
+                        >
+                          {isSyncBusy ? "Menghubungkan..." : "Buat & Hubungkan"}
+                        </button>
+                      </form>
+                    ) : (
+                      <form onSubmit={handlePairSync}>
+                        <p className="sync-hint">
+                          Tempel Link Pasangan yang dikirim oleh pasanganmu jika tidak membukanya langsung.
+                        </p>
+                        <input
+                          className="text-input"
+                          type="text"
+                          placeholder="Tempel Link Pasangan (#sync=...)"
+                          value={pairInput}
+                          onChange={(event) => setPairInput(event.target.value)}
+                          required
+                        />
+                        <button
+                          className="sync-primary-button"
+                          type="submit"
+                          disabled={isSyncBusy}
+                        >
+                          {isSyncBusy ? "Menyambungkan..." : "Sambungkan Perangkat"}
+                        </button>
+                      </form>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          <p className="privacy-note">
+            <span>♧</span> Otomatis tersimpan di perangkat &amp; siap disinkronkan tanpa database.
+          </p>
         </aside>
 
         <section className="preview-section" aria-label="Pratinjau surat perjanjian">
