@@ -5,31 +5,15 @@ import {
   useEffect,
   useRef,
   useState,
-  type FormEvent,
   type PointerEvent,
 } from "react";
 import {
   AGREEMENT_STORAGE_KEY,
   createDefaultAgreement,
-  decodeSharedAgreement,
-  encodeSharedAgreement,
   initialPoints,
   isSavedAgreement,
   type SavedAgreement,
 } from "@/lib/agreement";
-import {
-  clearGistSyncConfig,
-  createSharedGist,
-  decodePairingToken,
-  encodePairingToken,
-  fetchSharedGist,
-  loadGistSyncConfig,
-  saveGistSyncConfig,
-  updateSharedGist,
-  type GistSyncConfig,
-} from "@/lib/gist-sync";
-
-const LAST_SYNCED_SNAPSHOT_KEY = "perjanjiankita:synced-snapshot:v1";
 
 function HeartMark() {
   return (
@@ -173,287 +157,135 @@ function SignaturePad({
   );
 }
 
-function getBaseAppUrl(): string {
-  return `${window.location.origin}${window.location.pathname}`;
-}
-
 export default function Home() {
   const [points, setPoints] = useState(initialPoints);
   const [newPoint, setNewPoint] = useState("");
   const [date, setDate] = useState("");
   const [place, setPlace] = useState("");
   const [signatures, setSignatures] = useState(["", ""]);
-  const [isLocalReady, setIsLocalReady] = useState(false);
+  const [isRemoteReady, setIsRemoteReady] = useState(false);
 
   const [isSavingPdf, setIsSavingPdf] = useState(false);
   const [pdfError, setPdfError] = useState("");
-  const [storageError, setStorageError] = useState("");
-
-  const [shareStatus, setShareStatus] = useState("");
-  const [shareLink, setShareLink] = useState("");
-
-  const [syncConfig, setSyncConfig] = useState<GistSyncConfig | null>(null);
-  const [syncStatus, setSyncStatus] = useState("Memuat data tersimpan...");
+  const [syncStatus, setSyncStatus] = useState("Memuat perjanjian...");
   const [syncError, setSyncError] = useState("");
-  const [syncSuccessMessage, setSyncSuccessMessage] = useState("");
   const [hasConflict, setHasConflict] = useState(false);
-  const [isSyncBusy, setIsSyncBusy] = useState(false);
+  const [hasStoredRemote, setHasStoredRemote] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [saveRetry, setSaveRetry] = useState(0);
 
-  const [showSyncSetup, setShowSyncSetup] = useState(false);
-  const [setupMode, setSetupMode] = useState<"create" | "pair">("create");
-  const [tokenInput, setTokenInput] = useState("");
-  const [pairInput, setPairInput] = useState("");
-
+  const revisionRef = useRef<string | null>(null);
+  const savedSnapshotRef = useRef("");
   const currentSnapshotRef = useRef("");
-  const lastRemoteSnapshotRef = useRef("");
-  const remoteVersionRef = useRef<string | null>(null);
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   const agreement: SavedAgreement = { points, date, place, signatures };
   const agreementSnapshot = JSON.stringify(agreement);
   currentSnapshotRef.current = agreementSnapshot;
 
-  const applyAgreementState = useCallback((saved: SavedAgreement) => {
-    setPoints(saved.points);
-    setDate(saved.date);
-    setPlace(saved.place);
-    setSignatures(saved.signatures);
-    currentSnapshotRef.current = JSON.stringify(saved);
-  }, []);
-
-  const persistLocalAgreement = useCallback((snapshot: string) => {
+  const persistLocalBackup = useCallback((snapshot: string) => {
     try {
       window.localStorage.setItem(AGREEMENT_STORAGE_KEY, snapshot);
-      setStorageError("");
-    } catch (error) {
-      console.error("Failed to save agreement to localStorage.", error);
-      setStorageError("Penyimpanan browser penuh atau diblokir.");
+    } catch {
+      // Ignore non-fatal localStorage backup errors.
     }
   }, []);
 
-  const persistSyncedState = useCallback(
-    (config: GistSyncConfig, snapshot: string) => {
-      saveGistSyncConfig(config);
-      setSyncConfig(config);
-      remoteVersionRef.current = config.version;
-      lastRemoteSnapshotRef.current = snapshot;
-      try {
-        window.localStorage.setItem(LAST_SYNCED_SNAPSHOT_KEY, snapshot);
-      } catch {
-        // Ignore non-fatal localStorage quota errors for mirror key.
+  const applyAgreement = useCallback(
+    (saved: SavedAgreement, markAsSaved = true) => {
+      const snapshot = JSON.stringify(saved);
+      setPoints(saved.points);
+      setDate(saved.date);
+      setPlace(saved.place);
+      setSignatures(saved.signatures);
+      currentSnapshotRef.current = snapshot;
+      if (markAsSaved) {
+        savedSnapshotRef.current = snapshot;
       }
+      persistLocalBackup(snapshot);
     },
-    [],
+    [persistLocalBackup],
   );
 
-  const pullFromGist = useCallback(
-    async (
-      config: GistSyncConfig,
-      options: { isInitialLoad?: boolean; forceAcceptRemote?: boolean } = {},
-    ) => {
-      const remote = await fetchSharedGist(config.gistId, config.token);
-      if (!remote.agreement) {
-        if (options.isInitialLoad) {
-          const currentLocal = JSON.parse(
-            currentSnapshotRef.current,
-          ) as SavedAgreement;
-          const updated = await updateSharedGist(
-            config.gistId,
-            config.token,
-            currentLocal,
-          );
-          persistSyncedState(
-            { ...config, version: updated.version },
-            currentSnapshotRef.current,
-          );
-          setSyncStatus("Tersinkron otomatis lintas jaringan");
-        }
-        return;
-      }
+  const fetchRemoteAgreement = useCallback(async () => {
+    const response = await fetch("/api/agreement", { cache: "no-store" });
+    if (!response.ok) {
+      const result = (await response.json()) as { error?: string };
+      throw new Error(result.error || "Gagal memuat perjanjian bersama.");
+    }
+    return (await response.json()) as {
+      agreement: SavedAgreement | null;
+      etag: string | null;
+    };
+  }, []);
 
-      const remoteSnapshot = JSON.stringify(remote.agreement);
-      const localSnapshot = currentSnapshotRef.current;
-
-      if (options.forceAcceptRemote) {
-        applyAgreementState(remote.agreement);
-        persistLocalAgreement(remoteSnapshot);
-        persistSyncedState(
-          { ...config, version: remote.version },
-          remoteSnapshot,
-        );
-        setHasConflict(false);
-        setSyncError("");
-        setSyncStatus("Versi terbaru lintas jaringan dimuat.");
-        return;
-      }
-
-      if (remoteSnapshot === localSnapshot) {
-        persistSyncedState(
-          { ...config, version: remote.version },
-          remoteSnapshot,
-        );
-        setHasConflict(false);
-        setSyncError("");
-        setSyncStatus("Tersinkron otomatis lintas jaringan");
-        return;
-      }
-
-      let lastSyncedSnapshot = "";
-      try {
-        lastSyncedSnapshot =
-          window.localStorage.getItem(LAST_SYNCED_SNAPSHOT_KEY) || "";
-      } catch {
-        lastSyncedSnapshot = "";
-      }
-
-      const isFreshDeviceOrUnedited =
-        config.version === null ||
-        localSnapshot === lastSyncedSnapshot ||
-        localSnapshot === lastRemoteSnapshotRef.current;
-
-      if (isFreshDeviceOrUnedited) {
-        applyAgreementState(remote.agreement);
-        persistLocalAgreement(remoteSnapshot);
-        persistSyncedState(
-          { ...config, version: remote.version },
-          remoteSnapshot,
-        );
-        setHasConflict(false);
-        setSyncError("");
-        setSyncStatus("Perubahan terbaru dari pasangan dimuat.");
-        return;
-      }
-
-      if (config.version && remote.version === config.version) {
-        // Remote hasn't changed; local has offline changes waiting to push.
-        lastRemoteSnapshotRef.current = lastSyncedSnapshot || "";
-        remoteVersionRef.current = remote.version;
-        return;
-      }
-
-      setHasConflict(true);
-      setSyncStatus("Ada perbedaan isi antara perangkat ini dan cloud.");
-      setSyncError(
-        "Perangkat lain juga mengubah perjanjian. Pilih versi mana yang ingin dipakai.",
-      );
-    },
-    [applyAgreementState, persistLocalAgreement, persistSyncedState],
-  );
-
-  // Initial load: pairing link / share link / localStorage / Gist sync.
+  // Load saved agreement immediately on page open (no login required).
   useEffect(() => {
     let cancelled = false;
 
     void (async () => {
-      let activeConfig = loadGistSyncConfig();
-      const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-      const queryParams = new URLSearchParams(window.location.search);
-
-      const pairingParam = hashParams.get("sync") || queryParams.get("sync");
-      const dataParam = hashParams.get("data") || queryParams.get("data");
-
-      let initialAgreement = createDefaultAgreement();
+      let localBackup: SavedAgreement | null = null;
       try {
-        const storedLocal = window.localStorage.getItem(AGREEMENT_STORAGE_KEY);
-        if (storedLocal) {
-          const parsed: unknown = JSON.parse(storedLocal);
+        const localRaw = window.localStorage.getItem(AGREEMENT_STORAGE_KEY);
+        if (localRaw) {
+          const parsed: unknown = JSON.parse(localRaw);
           if (isSavedAgreement(parsed)) {
-            initialAgreement = parsed;
+            localBackup = parsed;
           }
         }
+      } catch {
+        localBackup = null;
+      }
+
+      if (localBackup) {
+        applyAgreement(localBackup, false);
+      }
+
+      try {
+        const remote = await fetchRemoteAgreement();
+        if (cancelled) return;
+        revisionRef.current = remote.etag;
+        setHasStoredRemote(Boolean(remote.etag));
+
+        if (remote.agreement) {
+          applyAgreement(remote.agreement, true);
+          setSyncStatus("Tersimpan otomatis & sinkron");
+        } else if (localBackup) {
+          applyAgreement(localBackup, false);
+          savedSnapshotRef.current = "";
+          setSyncStatus("Menyimpan data ke penyimpanan bersama...");
+        } else {
+          applyAgreement(createDefaultAgreement(), true);
+          setSyncStatus("Siap ditulis — otomatis tersimpan");
+        }
+        setSyncError("");
+        setHasConflict(false);
+        setIsRemoteReady(true);
       } catch (error) {
-        console.error("Failed to load local agreement.", error);
-        setStorageError("Data lokal sebelumnya tidak dapat dibaca.");
-      }
-
-      if (dataParam) {
-        try {
-          initialAgreement = await decodeSharedAgreement(dataParam);
-          persistLocalAgreement(JSON.stringify(initialAgreement));
-          setSyncSuccessMessage("Isi surat dari link snapshot berhasil dimuat.");
-        } catch (error) {
-          setSyncError(
-            error instanceof Error
-              ? `Link snapshot tidak valid: ${error.message}`
-              : "Link snapshot tidak dapat dibaca.",
-          );
-        }
-      }
-
-      if (pairingParam) {
-        try {
-          const paired = decodePairingToken(pairingParam);
-          activeConfig = {
-            gistId: paired.gistId,
-            token: paired.token,
-            version: null,
-          };
-          saveGistSyncConfig(activeConfig);
-          setSyncSuccessMessage(
-            "Perangkat berhasil terhubung! Perubahan kalian sekarang sinkron otomatis.",
-          );
-        } catch (error) {
-          setSyncError(
-            error instanceof Error
-              ? error.message
-              : "Link pasangan tidak valid.",
-          );
-        }
-      }
-
-      if (pairingParam || dataParam) {
-        window.history.replaceState(null, "", getBaseAppUrl());
-      }
-
-      if (cancelled) return;
-      applyAgreementState(initialAgreement);
-
-      if (activeConfig) {
-        setSyncConfig(activeConfig);
-        remoteVersionRef.current = activeConfig.version;
-        try {
-          lastRemoteSnapshotRef.current =
-            window.localStorage.getItem(LAST_SYNCED_SNAPSHOT_KEY) || "";
-        } catch {
-          lastRemoteSnapshotRef.current = "";
-        }
-        setSyncStatus("Menyelaraskan data bersama...");
-        try {
-          await pullFromGist(activeConfig, { isInitialLoad: true });
-        } catch (error) {
-          if (!cancelled) {
-            setSyncError(
-              error instanceof Error
-                ? error.message
-                : "Gagal menyinkronkan data dari jaringan.",
-            );
-            setSyncStatus("Tersimpan lokal (menunggu koneksi)");
-          }
-        }
-      } else {
-        setSyncStatus("Tersimpan otomatis di perangkat ini");
-      }
-
-      if (!cancelled) {
-        setIsLocalReady(true);
+        if (cancelled) return;
+        console.error("Failed to load remote agreement.", error);
+        setSyncError(
+          error instanceof Error ? error.message : "Gagal menghubungkan ke server.",
+        );
+        setSyncStatus("Tersimpan di perangkat (offline)");
+        setIsRemoteReady(true);
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [applyAgreementState, persistLocalAgreement, pullFromGist]);
+  }, [applyAgreement, fetchRemoteAgreement]);
 
-  // Immediate localStorage auto-save whenever fields change.
+  // Immediate local backup on every edit.
   useEffect(() => {
-    if (!isLocalReady) return;
-    persistLocalAgreement(agreementSnapshot);
-  }, [agreementSnapshot, isLocalReady, persistLocalAgreement]);
+    if (!isRemoteReady) return;
+    persistLocalBackup(agreementSnapshot);
+  }, [agreementSnapshot, isRemoteReady, persistLocalBackup]);
 
-  // Debounced automatic sync to GitHub Gist when configured.
+  // Automatic debounced save to JSON file / Vercel Blob.
   useEffect(() => {
-    if (!isLocalReady || !syncConfig || hasConflict) return;
+    if (!isRemoteReady || hasConflict) return;
     const retryDelay = Math.min(
       2500 * 2 ** Math.min(Math.max(saveRetry - 1, 0), 4),
       30_000,
@@ -461,26 +293,23 @@ export default function Home() {
 
     const timeout = window.setTimeout(() => {
       const snapshot = currentSnapshotRef.current;
-      if (snapshot === lastRemoteSnapshotRef.current) return;
+      if (snapshot === savedSnapshotRef.current) return;
 
-      const pushUpdate = async () => {
-        if (hasConflict || snapshot === lastRemoteSnapshotRef.current) return;
-        setSyncStatus("Menyimpan lintas jaringan...");
+      const save = async () => {
+        if (hasConflict || snapshot === savedSnapshotRef.current) return;
+        setIsSyncing(true);
+        setSyncStatus("Menyimpan otomatis...");
         setSyncError("");
         try {
-          // Check remote version first so we never silently overwrite partner edits.
-          const latest = await fetchSharedGist(syncConfig.gistId, syncConfig.token);
-          const remoteSnapshot = latest.agreement
-            ? JSON.stringify(latest.agreement)
-            : "";
-          if (
-            remoteVersionRef.current &&
-            latest.version &&
-            latest.version !== remoteVersionRef.current &&
-            remoteSnapshot &&
-            remoteSnapshot !== lastRemoteSnapshotRef.current &&
-            remoteSnapshot !== snapshot
-          ) {
+          const response = await fetch("/api/agreement", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              agreement: JSON.parse(snapshot) as SavedAgreement,
+              etag: revisionRef.current,
+            }),
+          });
+          if (response.status === 409) {
             setHasConflict(true);
             setSyncStatus("Ada perubahan baru dari perangkat lain.");
             setSyncError(
@@ -488,70 +317,81 @@ export default function Home() {
             );
             return;
           }
-
-          const payload = JSON.parse(snapshot) as SavedAgreement;
-          const updated = await updateSharedGist(
-            syncConfig.gistId,
-            syncConfig.token,
-            payload,
-          );
-          persistSyncedState(
-            { ...syncConfig, version: updated.version },
-            snapshot,
-          );
+          if (!response.ok) {
+            const result = (await response.json()) as { error?: string };
+            throw new Error(result.error || "Gagal menyimpan perubahan.");
+          }
+          const result = (await response.json()) as { etag: string };
+          revisionRef.current = result.etag;
+          setHasStoredRemote(true);
+          savedSnapshotRef.current = snapshot;
           setSaveRetry(0);
-          setSyncStatus("Tersinkron otomatis lintas jaringan");
+          setSyncStatus("Tersimpan otomatis & sinkron");
         } catch (error) {
-          console.error("Failed to sync agreement to GitHub Gist.", error);
+          console.error("Failed to auto-save agreement.", error);
           setSyncError(
-            error instanceof Error
-              ? error.message
-              : "Gagal menyinkronkan ke jaringan. Akan dicoba lagi.",
+            error instanceof Error ? error.message : "Gagal menyimpan data.",
           );
-          setSyncStatus("Tersimpan lokal (menunggu sinkronisasi)");
+          setSyncStatus("Menunggu koneksi untuk menyimpan...");
           setSaveRetry((attempt) => attempt + 1);
+        } finally {
+          setIsSyncing(false);
         }
       };
 
-      saveQueueRef.current = saveQueueRef.current.then(pushUpdate, pushUpdate);
-    }, saveRetry ? retryDelay : 800);
+      saveQueueRef.current = saveQueueRef.current.then(save, save);
+    }, saveRetry ? retryDelay : 600);
 
     return () => window.clearTimeout(timeout);
-  }, [
-    agreementSnapshot,
-    hasConflict,
-    isLocalReady,
-    persistSyncedState,
-    saveRetry,
-    syncConfig,
-  ]);
+  }, [agreementSnapshot, hasConflict, isRemoteReady, saveRetry]);
 
-  // Retry immediately when network returns, and poll for partner updates while visible.
+  // Background polling & tab-focus sync so partner edits appear automatically.
   useEffect(() => {
-    if (!isLocalReady || !syncConfig) return;
+    if (!isRemoteReady) return;
 
     const refreshWhenIdle = () => {
       if (
         document.hidden ||
         hasConflict ||
-        currentSnapshotRef.current !== lastRemoteSnapshotRef.current
+        currentSnapshotRef.current !== savedSnapshotRef.current
       ) {
         return;
       }
-      void pullFromGist(syncConfig).catch((error: unknown) => {
-        console.error("Background Gist sync check failed.", error);
-      });
+      void fetchRemoteAgreement()
+        .then((remote) => {
+          if (remote.etag === revisionRef.current) return;
+          if (currentSnapshotRef.current !== savedSnapshotRef.current) {
+            setHasConflict(true);
+            setSyncStatus("Ada perubahan baru dari perangkat lain.");
+            setSyncError(
+              "Perjanjian berubah di perangkat lain. Pilih versi yang ingin dipakai.",
+            );
+            return;
+          }
+          revisionRef.current = remote.etag;
+          setHasStoredRemote(Boolean(remote.etag));
+          if (remote.agreement) {
+            applyAgreement(remote.agreement, true);
+            setSyncStatus("Perubahan dari perangkat lain dimuat.");
+          } else {
+            applyAgreement(createDefaultAgreement(), true);
+            setSyncStatus("Surat dikembalikan ke template awal.");
+          }
+        })
+        .catch(() => {
+          // Silent retry on next interval.
+        });
     };
 
     const handleOnline = () => {
-      if (currentSnapshotRef.current !== lastRemoteSnapshotRef.current) {
+      if (currentSnapshotRef.current !== savedSnapshotRef.current) {
         setSaveRetry((attempt) => (attempt === 0 ? 1 : attempt));
       } else {
         refreshWhenIdle();
       }
     };
 
-    const interval = window.setInterval(refreshWhenIdle, 8_000);
+    const interval = window.setInterval(refreshWhenIdle, 5_000);
     window.addEventListener("focus", refreshWhenIdle);
     document.addEventListener("visibilitychange", refreshWhenIdle);
     window.addEventListener("online", handleOnline);
@@ -562,196 +402,104 @@ export default function Home() {
       document.removeEventListener("visibilitychange", refreshWhenIdle);
       window.removeEventListener("online", handleOnline);
     };
-  }, [hasConflict, isLocalReady, pullFromGist, syncConfig]);
+  }, [applyAgreement, fetchRemoteAgreement, hasConflict, isRemoteReady]);
 
-  const handleCreateSync = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const loadLatestAgreement = async () => {
+    setIsSyncing(true);
     setSyncError("");
-    setSyncSuccessMessage("");
-    setIsSyncBusy(true);
     try {
-      const currentAgreement = JSON.parse(
-        currentSnapshotRef.current,
-      ) as SavedAgreement;
-      const created = await createSharedGist(tokenInput, currentAgreement);
-      const nextConfig: GistSyncConfig = {
-        gistId: created.gistId,
-        token: tokenInput.trim(),
-        version: created.version,
-      };
-      persistSyncedState(nextConfig, currentSnapshotRef.current);
-      setTokenInput("");
-      setShowSyncSetup(false);
+      const remote = await fetchRemoteAgreement();
+      revisionRef.current = remote.etag;
+      setHasStoredRemote(Boolean(remote.etag));
+      applyAgreement(remote.agreement || createDefaultAgreement(), true);
       setHasConflict(false);
-      setSyncStatus("Tersinkron otomatis lintas jaringan");
-      setSyncSuccessMessage(
-        "Sinkronisasi aktif! Sekarang klik 'Salin Link Pasangan' untuk dikirim ke pacar.",
+      setSyncStatus(
+        remote.agreement
+          ? "Versi terbaru berhasil dimuat."
+          : "Siap ditulis — otomatis tersimpan",
       );
-    } catch (error) {
-      setSyncError(
-        error instanceof Error
-          ? error.message
-          : "Gagal mengaktifkan sinkronisasi.",
-      );
-    } finally {
-      setIsSyncBusy(false);
-    }
-  };
-
-  const handlePairSync = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setSyncError("");
-    setSyncSuccessMessage("");
-    setIsSyncBusy(true);
-    try {
-      const paired = decodePairingToken(pairInput);
-      const nextConfig: GistSyncConfig = {
-        gistId: paired.gistId,
-        token: paired.token,
-        version: null,
-      };
-      saveGistSyncConfig(nextConfig);
-      setSyncConfig(nextConfig);
-      await pullFromGist(nextConfig, { isInitialLoad: true });
-      setPairInput("");
-      setShowSyncSetup(false);
-      setSyncSuccessMessage("Perangkat berhasil disambungkan dan disinkronkan!");
-    } catch (error) {
-      setSyncError(
-        error instanceof Error
-          ? error.message
-          : "Link pasangan tidak valid.",
-      );
-    } finally {
-      setIsSyncBusy(false);
-    }
-  };
-
-  const copyPairingLink = async () => {
-    if (!syncConfig) return;
-    setSyncError("");
-    setSyncSuccessMessage("");
-    const pairingToken = encodePairingToken(syncConfig.gistId, syncConfig.token);
-    const url = `${getBaseAppUrl()}#sync=${pairingToken}`;
-    try {
-      await navigator.clipboard.writeText(url);
-      setSyncSuccessMessage(
-        "Link pasangan tersalin! Kirim ke pacar—cukup buka 1x di HP-nya untuk sinkron otomatis.",
-      );
-    } catch {
-      setShareLink(url);
-      setSyncSuccessMessage(
-        "Salin link pasangan di kotak di bawah lalu kirim hanya ke pasanganmu.",
-      );
-    }
-  };
-
-  const manualRefresh = async () => {
-    if (!syncConfig) return;
-    setIsSyncBusy(true);
-    setSyncError("");
-    setSyncSuccessMessage("");
-    try {
-      await pullFromGist(syncConfig);
-      setSyncSuccessMessage("Data sudah paling baru.");
-    } catch (error) {
-      setSyncError(
-        error instanceof Error ? error.message : "Gagal menyegarkan data.",
-      );
-    } finally {
-      setIsSyncBusy(false);
-    }
-  };
-
-  const resolveUseRemote = async () => {
-    if (!syncConfig) return;
-    setIsSyncBusy(true);
-    setSyncError("");
-    try {
-      await pullFromGist(syncConfig, { forceAcceptRemote: true });
-      setSyncSuccessMessage("Versi terbaru dari pasangan diterapkan.");
     } catch (error) {
       setSyncError(
         error instanceof Error ? error.message : "Gagal memuat versi terbaru.",
       );
     } finally {
-      setIsSyncBusy(false);
+      setIsSyncing(false);
     }
   };
 
-  const resolveKeepLocal = async () => {
-    if (!syncConfig) return;
-    setIsSyncBusy(true);
+  const forceSaveLocalAgreement = async () => {
+    setIsSyncing(true);
     setSyncError("");
     try {
       const snapshot = currentSnapshotRef.current;
-      const updated = await updateSharedGist(
-        syncConfig.gistId,
-        syncConfig.token,
-        JSON.parse(snapshot) as SavedAgreement,
-      );
-      persistSyncedState({ ...syncConfig, version: updated.version }, snapshot);
+      const response = await fetch("/api/agreement", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agreement: JSON.parse(snapshot) as SavedAgreement,
+          etag: revisionRef.current,
+          force: true,
+        }),
+      });
+      if (!response.ok) {
+        const result = (await response.json()) as { error?: string };
+        throw new Error(result.error || "Gagal menimpa data.");
+      }
+      const result = (await response.json()) as { etag: string };
+      revisionRef.current = result.etag;
+      setHasStoredRemote(true);
+      savedSnapshotRef.current = snapshot;
       setHasConflict(false);
-      setSyncStatus("Tersinkron otomatis lintas jaringan");
-      setSyncSuccessMessage("Versi perangkat ini berhasil disimpan ke semua perangkat.");
+      setSaveRetry(0);
+      setSyncStatus("Tersimpan otomatis & sinkron");
     } catch (error) {
       setSyncError(
         error instanceof Error ? error.message : "Gagal menyimpan versi ini.",
       );
     } finally {
-      setIsSyncBusy(false);
+      setIsSyncing(false);
     }
   };
 
-  const resetAgreement = () => {
+  const resetSharedAgreement = async () => {
     if (
       !window.confirm(
-        "Kembalikan isi surat dan tanda tangan ke template awal?",
+        "Hapus isi & tanda tangan lalu kembalikan ke template awal untuk kalian berdua?",
       )
     ) {
       return;
     }
-    const fresh = createDefaultAgreement();
-    applyAgreementState(fresh);
-    persistLocalAgreement(JSON.stringify(fresh));
-    setSyncSuccessMessage("Surat dikembalikan ke template awal.");
-  };
 
-  const disconnectSync = () => {
-    if (
-      !window.confirm(
-        "Putuskan sinkronisasi Gist di perangkat ini? Data lokal tetap tersimpan di browser.",
-      )
-    ) {
-      return;
+    if (revisionRef.current) {
+      try {
+        const response = await fetch("/api/agreement", {
+          method: "DELETE",
+          headers: { "If-Match": revisionRef.current },
+        });
+        if (response.status === 409) {
+          setHasConflict(true);
+          setSyncStatus("Ada perubahan baru dari perangkat lain.");
+          setSyncError("Muat versi terbaru dahulu sebelum mereset surat.");
+          return;
+        }
+        if (!response.ok) {
+          const result = (await response.json()) as { error?: string };
+          throw new Error(result.error || "Gagal mereset surat.");
+        }
+      } catch (error) {
+        setSyncError(
+          error instanceof Error ? error.message : "Gagal mereset surat.",
+        );
+        return;
+      }
     }
-    clearGistSyncConfig();
-    setSyncConfig(null);
-    remoteVersionRef.current = null;
-    lastRemoteSnapshotRef.current = "";
+
+    revisionRef.current = null;
+    setHasStoredRemote(false);
     setHasConflict(false);
     setSyncError("");
-    setSyncSuccessMessage("");
-    setSyncStatus("Tersimpan otomatis di perangkat ini");
-  };
-
-  const copyShareLink = async () => {
-    setPdfError("");
-    setShareStatus("");
-    try {
-      const token = await encodeSharedAgreement(agreement);
-      const url = `${getBaseAppUrl()}#data=${token}`;
-      setShareLink(url);
-      if (navigator.clipboard) {
-        await navigator.clipboard.writeText(url);
-        setShareStatus("Link snapshot tersalin ke clipboard.");
-      } else {
-        setShareStatus("Link snapshot siap disalin di bawah.");
-      }
-    } catch (error) {
-      console.error("Failed to create share link.", error);
-      setPdfError("Gagal membuat link snapshot.");
-    }
+    applyAgreement(createDefaultAgreement(), true);
+    setSyncStatus("Surat dikembalikan ke template awal.");
   };
 
   const addPoint = () => {
@@ -817,9 +565,9 @@ export default function Home() {
 
   const syncStatusClass = syncError || hasConflict
     ? "sync-status sync-error"
-    : syncConfig
-      ? "sync-status"
-      : "sync-status sync-local";
+    : isSyncing || agreementSnapshot !== savedSnapshotRef.current
+      ? "sync-status sync-pending"
+      : "sync-status";
 
   return (
     <main className="site-shell">
@@ -947,26 +695,8 @@ export default function Home() {
               </svg>
               {isSavingPdf ? "Membuat PDF..." : "Simpan PDF"}
             </button>
-            <button type="button" className="share-button" onClick={copyShareLink}>
-              <svg viewBox="0 0 20 20" aria-hidden="true">
-                <path d="M8 12 12 8M10.5 5.5l1.8-1.8a3 3 0 1 1 4.2 4.2l-1.8 1.8M9.5 14.5l-1.8 1.8a3 3 0 1 1-4.2-4.2l1.8-1.8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-              Salin link snapshot
-            </button>
           </div>
-
           {pdfError && <p className="pdf-error" role="alert">{pdfError}</p>}
-          {storageError && <p className="pdf-error" role="alert">{storageError}</p>}
-          {shareStatus && <p className="share-status">{shareStatus}</p>}
-          {shareLink && (
-            <textarea
-              className="share-link"
-              readOnly
-              value={shareLink}
-              aria-label="Tautan yang bisa disalin"
-              onFocus={(event) => event.currentTarget.select()}
-            />
-          )}
 
           <div className="sync-panel" aria-live="polite">
             <p className={syncStatusClass}>
@@ -974,164 +704,44 @@ export default function Home() {
               {syncStatus}
             </p>
             {syncError && <p className="sync-message" role="alert">{syncError}</p>}
-            {syncSuccessMessage && <p className="sync-success">{syncSuccessMessage}</p>}
 
             {hasConflict && (
               <div className="sync-actions-grid">
                 <button
                   className="sync-primary-button"
                   type="button"
-                  disabled={isSyncBusy}
-                  onClick={resolveUseRemote}
+                  disabled={isSyncing}
+                  onClick={loadLatestAgreement}
                 >
-                  Muat versi terbaru dari pasangan
+                  Muat versi terbaru
                 </button>
                 <button
                   className="sync-secondary-button"
                   type="button"
-                  disabled={isSyncBusy}
-                  onClick={resolveKeepLocal}
+                  disabled={isSyncing}
+                  onClick={forceSaveLocalAgreement}
                 >
-                  Timpa dengan versi perangkat ini
+                  Timpa dengan versi ini
                 </button>
               </div>
             )}
 
-            {syncConfig ? (
+            {hasStoredRemote && (
               <div className="sync-actions-grid">
-                <button
-                  className="sync-primary-button"
-                  type="button"
-                  onClick={copyPairingLink}
-                >
-                  Salin Link Pasangan (untuk Pacar)
-                </button>
-                <button
-                  className="sync-secondary-button"
-                  type="button"
-                  disabled={isSyncBusy}
-                  onClick={manualRefresh}
-                >
-                  {isSyncBusy ? "Menyegarkan..." : "Segarkan sekarang"}
-                </button>
                 <button
                   className="sync-danger-button"
                   type="button"
-                  onClick={resetAgreement}
+                  disabled={agreementSnapshot !== savedSnapshotRef.current || isSyncing}
+                  onClick={resetSharedAgreement}
                 >
-                  Reset isi surat
-                </button>
-                <button
-                  className="sync-text-button"
-                  type="button"
-                  onClick={disconnectSync}
-                >
-                  Putuskan sinkronisasi di perangkat ini
+                  Reset surat bersama
                 </button>
               </div>
-            ) : (
-              <>
-                <p className="sync-hint">
-                  Aktifkan sinkronisasi GitHub Gist (tanpa database) supaya perubahanmu dan pacar otomatis tersimpan dari jaringan mana saja.
-                </p>
-                <div className="sync-actions-grid">
-                  <button
-                    className="sync-secondary-button"
-                    type="button"
-                    onClick={() => setShowSyncSetup((open) => !open)}
-                  >
-                    {showSyncSetup ? "Tutup pengaturan sinkronisasi" : "Aktifkan Sinkronisasi Lintas Jaringan"}
-                  </button>
-                  <button
-                    className="sync-danger-button"
-                    type="button"
-                    onClick={resetAgreement}
-                  >
-                    Reset isi surat
-                  </button>
-                </div>
-
-                {showSyncSetup && (
-                  <div className="sync-setup">
-                    <div className="sync-tabs">
-                      <button
-                        type="button"
-                        className={`sync-tab ${setupMode === "create" ? "sync-tab-active" : ""}`}
-                        onClick={() => setSetupMode("create")}
-                      >
-                        Buat Baru (HP 1)
-                      </button>
-                      <button
-                        type="button"
-                        className={`sync-tab ${setupMode === "pair" ? "sync-tab-active" : ""}`}
-                        onClick={() => setSetupMode("pair")}
-                      >
-                        Link Pasangan (HP 2)
-                      </button>
-                    </div>
-
-                    {setupMode === "create" ? (
-                      <form onSubmit={handleCreateSync}>
-                        <ol className="sync-steps">
-                          <li>
-                            Buat token GitHub (izin <strong>gist</strong>) di{" "}
-                            <a
-                              href="https://github.com/settings/tokens/new?scopes=gist&description=Perjanjian%20Kita"
-                              target="_blank"
-                              rel="noreferrer"
-                            >
-                              halaman Token GitHub
-                            </a>.
-                          </li>
-                          <li>Tempel token di bawah lalu klik Hubungkan.</li>
-                          <li>Kirim <strong>Link Pasangan</strong> ke pacarmu (cukup buka 1x).</li>
-                        </ol>
-                        <input
-                          className="text-input"
-                          type="password"
-                          placeholder="Tempel GitHub Token (ghp_... / github_pat_...)"
-                          value={tokenInput}
-                          onChange={(event) => setTokenInput(event.target.value)}
-                          required
-                        />
-                        <button
-                          className="sync-primary-button"
-                          type="submit"
-                          disabled={isSyncBusy}
-                        >
-                          {isSyncBusy ? "Menghubungkan..." : "Buat & Hubungkan"}
-                        </button>
-                      </form>
-                    ) : (
-                      <form onSubmit={handlePairSync}>
-                        <p className="sync-hint">
-                          Tempel Link Pasangan yang dikirim oleh pasanganmu jika tidak membukanya langsung.
-                        </p>
-                        <input
-                          className="text-input"
-                          type="text"
-                          placeholder="Tempel Link Pasangan (#sync=...)"
-                          value={pairInput}
-                          onChange={(event) => setPairInput(event.target.value)}
-                          required
-                        />
-                        <button
-                          className="sync-primary-button"
-                          type="submit"
-                          disabled={isSyncBusy}
-                        >
-                          {isSyncBusy ? "Menyambungkan..." : "Sambungkan Perangkat"}
-                        </button>
-                      </form>
-                    )}
-                  </div>
-                )}
-              </>
             )}
           </div>
 
           <p className="privacy-note">
-            <span>♧</span> Otomatis tersimpan di perangkat &amp; siap disinkronkan tanpa database.
+            <span>♧</span> Tersimpan otomatis tanpa database dan langsung sinkron.
           </p>
         </aside>
 
